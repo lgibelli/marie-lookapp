@@ -1,0 +1,86 @@
+<Window x:Class="MarieLookApp.SearchWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:MarieLookApp"
+        Title="Marie LookApp"
+        Width="500" Height="400"
+        WindowStartupLocation="CenterScreen"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize"
+        Deactivated="OnDeactivated"
+        KeyDown="OnKeyDown">
+
+    <Window.Resources>
+        <local:NullToVisibilityConverter x:Key="NullToVisibilityConverter"/>
+    </Window.Resources>
+
+    <Border Background="White"
+            BorderBrush="#E0E0E0"
+            BorderThickness="1"
+            CornerRadius="8"
+            Margin="10">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="20" ShadowDepth="2" Opacity="0.3"/>
+        </Border.Effect>
+
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Search Input -->
+            <Border Grid.Row="0" BorderBrush="#E0E0E0" BorderThickness="0,0,0,1" Padding="15">
+                <TextBox x:Name="SearchBox"
+                         Style="{StaticResource ModernTextBox}"
+                         FontSize="16"
+                         BorderThickness="0"
+                         Text=""
+                         TextChanged="OnSearchTextChanged">
+                    <TextBox.InputBindings>
+                        <KeyBinding Key="Down" Command="{Binding MoveDownCommand}"/>
+                        <KeyBinding Key="Up" Command="{Binding MoveUpCommand}"/>
+                    </TextBox.InputBindings>
+                </TextBox>
+            </Border>
+
+            <!-- Results List -->
+            <ListBox x:Name="ResultsList"
+                     Grid.Row="1"
+                     BorderThickness="0"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     ItemContainerStyle="{StaticResource ResultItem}"
+                     MouseDoubleClick="OnResultDoubleClick"
+                     KeyDown="OnResultKeyDown">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel>
+                            <TextBlock Text="{Binding Text}"
+                                       TextTrimming="CharacterEllipsis"
+                                       FontSize="14"
+                                       Foreground="#333"/>
+                            <TextBlock Text="{Binding Tag}"
+                                       FontSize="11"
+                                       Foreground="#888"
+                                       Visibility="{Binding Tag, Converter={StaticResource NullToVisibilityConverter}}"
+                                       Margin="0,4,0,0"/>
+                        </StackPanel>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <!-- Status Bar -->
+            <Border Grid.Row="2" BorderBrush="#E0E0E0" BorderThickness="0,1,0,0" Padding="15,10">
+                <TextBlock x:Name="StatusText"
+                           Text="Type to search..."
+                           FontSize="12"
+                           Foreground="#888"/>
+            </Border>
+        </Grid>
+    </Border>
+</Window>
