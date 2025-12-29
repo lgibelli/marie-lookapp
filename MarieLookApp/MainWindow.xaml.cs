@@ -1,6 +1,6 @@
-using System.Drawing;
 using System.Windows;
 using MarieLookApp.Services;
+using Drawing = System.Drawing;
 
 namespace MarieLookApp;
 
@@ -21,21 +21,21 @@ public partial class MainWindow : Window
         Closing += OnClosing;
     }
 
-    private static Icon CreateTrayIcon()
+    private static Drawing.Icon CreateTrayIcon()
     {
         // Create a simple 16x16 icon with "M" letter
-        using var bitmap = new Bitmap(16, 16);
-        using var g = Graphics.FromImage(bitmap);
+        using var bitmap = new Drawing.Bitmap(16, 16);
+        using var g = Drawing.Graphics.FromImage(bitmap);
 
         // Blue background
-        g.Clear(Color.FromArgb(33, 150, 243));
+        g.Clear(Drawing.Color.FromArgb(33, 150, 243));
 
         // White "M" letter
-        using var font = new Font("Arial", 10, System.Drawing.FontStyle.Bold);
-        using var brush = new SolidBrush(Color.White);
+        using var font = new Drawing.Font("Arial", 10, Drawing.FontStyle.Bold);
+        using var brush = new Drawing.SolidBrush(Drawing.Color.White);
         g.DrawString("M", font, brush, 1, 1);
 
-        return Icon.FromHandle(bitmap.GetHicon());
+        return Drawing.Icon.FromHandle(bitmap.GetHicon());
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
