@@ -7,9 +7,8 @@ namespace MarieLookApp.Services;
 
 public class UpdateService
 {
-    // TODO: Update these with your actual GitHub repo details
     private const string GitHubOwner = "lgibelli";
-    private const string GitHubRepo = "marie-lookapp";
+    private const string GitHubRepo = "marie-lookapp-releases";
 
     private static readonly HttpClient HttpClient = new()
     {
