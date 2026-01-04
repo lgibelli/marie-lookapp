@@ -16,6 +16,7 @@
                 <ContextMenu>
                     <MenuItem Header="Search (Ctrl+Shift+L)" Click="OnSearchClick"/>
                     <MenuItem Header="Sync Phrases" Click="OnSyncClick"/>
+                    <MenuItem Header="Check for Updates" Click="OnCheckUpdateClick"/>
                     <Separator/>
                     <MenuItem Header="Logout" Click="OnLogoutClick"/>
                     <MenuItem Header="Exit" Click="OnExitClick"/>

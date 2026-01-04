@@ -7,6 +7,7 @@ namespace MarieLookApp;
 public partial class MainWindow : Window
 {
     private readonly HotkeyService _hotkeyService = new();
+    private readonly UpdateService _updateService = new();
     private SearchWindow? _searchWindow;
     private LoginWindow? _loginWindow;
 
@@ -44,6 +45,9 @@ public partial class MainWindow : Window
         _hotkeyService.Register(this);
         _hotkeyService.HotkeyPressed += OnHotkeyPressed;
 
+        // Subscribe to IPC events for context menu "open search" commands
+        App.Ipc.OpenSearchRequested += OnHotkeyPressed;
+
         // Check if user is authenticated
         if (!App.Supabase.IsAuthenticated)
         {
@@ -53,6 +57,29 @@ public partial class MainWindow : Window
         {
             // Sync phrases on startup
             await SyncPhrasesAsync();
+
+            // Open search window if started with --search flag
+            if (App.OpenSearchOnStart)
+            {
+                ShowSearchWindow();
+            }
+
+            // Check for updates in the background
+            _ = CheckForUpdatesSilentAsync();
+        }
+    }
+
+    private async Task CheckForUpdatesSilentAsync()
+    {
+        var result = await _updateService.CheckForUpdateAsync();
+        if (result.UpdateAvailable)
+        {
+            TrayIcon.ShowBalloonTip(
+                "Update Available",
+                $"Marie LookApp {result.NewVersion} is available. Click to download.",
+                Hardcodet.Wpf.TaskbarNotification.BalloonIcon.Info);
+
+            TrayIcon.TrayBalloonTipClicked += (s, e) => UpdateService.OpenReleasesPage();
         }
     }
 
@@ -141,6 +168,33 @@ public partial class MainWindow : Window
         else
         {
             MessageBox.Show($"Sync failed: {result.Error}", "Marie LookApp", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private async void OnCheckUpdateClick(object sender, RoutedEventArgs e)
+    {
+        var result = await _updateService.CheckForUpdateAsync();
+
+        if (result.Error != null)
+        {
+            MessageBox.Show($"Could not check for updates: {result.Error}", "Marie LookApp", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        else if (result.UpdateAvailable)
+        {
+            var response = MessageBox.Show(
+                $"Version {result.NewVersion} is available (you have {_updateService.CurrentVersion}).\n\nWould you like to download it now?",
+                "Update Available",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Information);
+
+            if (response == MessageBoxResult.Yes)
+            {
+                UpdateService.OpenReleasesPage();
+            }
+        }
+        else
+        {
+            MessageBox.Show($"You're up to date! (v{_updateService.CurrentVersion})", "Marie LookApp", MessageBoxButton.OK, MessageBoxImage.Information);
         }
     }
 

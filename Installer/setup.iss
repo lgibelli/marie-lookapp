@@ -56,7 +56,18 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Registry]
+; Startup entry
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue; Tasks: startup
+
+; Explorer/folder background context menu
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\MarieLookApp"; ValueType: string; ValueName: ""; ValueData: "Search with Marie (Ctrl+Shift+L)"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\MarieLookApp"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\MarieLookApp\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" --search"; Flags: uninsdeletekey
+
+; Desktop background context menu
+Root: HKCU; Subkey: "Software\Classes\DesktopBackground\shell\MarieLookApp"; ValueType: string; ValueName: ""; ValueData: "Search with Marie (Ctrl+Shift+L)"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\DesktopBackground\shell\MarieLookApp"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\DesktopBackground\shell\MarieLookApp\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" --search"; Flags: uninsdeletekey
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
