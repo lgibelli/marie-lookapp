@@ -74,8 +74,6 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: create-installer
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
       - name: Download x64 installer
@@ -90,8 +88,13 @@ jobs:
           name: MarieLookApp-arm64-Setup
           path: installers/
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: installers/*.exe
-          generate_release_notes: true
+      - name: Create Release on public repo
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_PAT }}
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          gh release create "$TAG_NAME" \
+            --repo lgibelli/marie-lookapp-releases \
+            --title "Marie LookApp $TAG_NAME" \
+            --generate-notes \
+            installers/*.exe
