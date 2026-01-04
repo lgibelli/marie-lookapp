@@ -8,6 +8,12 @@ public class TextInsertionService
     [DllImport("user32.dll")]
     private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
     private const byte VK_CONTROL = 0x11;
     private const byte VK_V = 0x56;
     private const uint KEYEVENTF_KEYUP = 0x0002;
@@ -34,14 +40,21 @@ public class TextInsertionService
             // Set our text to clipboard
             Clipboard.SetText(text);
 
-            // Small delay to ensure clipboard is ready
-            Thread.Sleep(50);
+            // Ensure the foreground window has focus before sending keys
+            var foreground = GetForegroundWindow();
+            if (foreground != IntPtr.Zero)
+            {
+                SetForegroundWindow(foreground);
+            }
+
+            // Delay to ensure clipboard and focus are ready
+            Thread.Sleep(100);
 
             // Simulate Ctrl+V
             SimulateCtrlV();
 
             // Small delay before restoring clipboard
-            Thread.Sleep(100);
+            Thread.Sleep(150);
         }
         finally
         {

@@ -145,13 +145,15 @@ public partial class SearchWindow : Window
     {
         if (ResultsList.SelectedItem is Phrase phrase)
         {
-            // Close window first so text goes to the right place
+            var textToInsert = phrase.Text;
+
+            // Close window first so focus returns to previous app
             Close();
 
-            // Small delay to ensure window is closed and focus returns
-            Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+            // Longer delay to ensure focus fully returns to target app
+            Task.Delay(200).ContinueWith(_ =>
             {
-                App.TextInsertion.InsertText(phrase.Text);
+                Dispatcher.Invoke(() => App.TextInsertion.InsertText(textToInsert));
             });
         }
     }
