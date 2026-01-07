@@ -2,7 +2,7 @@
 ; Build with: ISCC.exe setup.iss
 
 #define MyAppName "Marie LookApp"
-#define MyAppVersion "1.1.1"
+#define MyAppVersion "1.1.2"
 #define MyAppPublisher "lgibelli"
 #define MyAppExeName "MarieLookApp.exe"
 

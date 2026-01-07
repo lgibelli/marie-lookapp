@@ -42,8 +42,16 @@ public partial class MainWindow : Window
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         // Register global hotkey
-        _hotkeyService.Register(this);
+        var hotkeyRegistered = _hotkeyService.Register(this);
         _hotkeyService.HotkeyPressed += OnHotkeyPressed;
+
+        if (!hotkeyRegistered)
+        {
+            TrayIcon.ShowBalloonTip(
+                "Hotkey Failed",
+                "Could not register Ctrl+Shift+L. Another app may be using it.",
+                Hardcodet.Wpf.TaskbarNotification.BalloonIcon.Warning);
+        }
 
         // Subscribe to IPC events for context menu "open search" commands
         App.Ipc.OpenSearchRequested += OnHotkeyPressed;

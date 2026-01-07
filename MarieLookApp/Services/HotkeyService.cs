@@ -29,7 +29,7 @@ public class HotkeyService : IDisposable
 
     public event Action? HotkeyPressed;
 
-    public void Register(Window window)
+    public bool Register(Window window)
     {
         var helper = new WindowInteropHelper(window);
         helper.EnsureHandle();
@@ -41,10 +41,7 @@ public class HotkeyService : IDisposable
         // Register Ctrl+Shift+L
         _isRegistered = RegisterHotKey(_windowHandle, HOTKEY_ID, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_L);
 
-        if (!_isRegistered)
-        {
-            System.Diagnostics.Debug.WriteLine("Failed to register hotkey Ctrl+Shift+L");
-        }
+        return _isRegistered;
     }
 
     private IntPtr HwndHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
