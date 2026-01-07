@@ -108,6 +108,9 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Capture target window BEFORE opening search so we know where to paste
+        App.TextInsertion.CaptureTargetWindow();
+
         _searchWindow = new SearchWindow();
         _searchWindow.Closed += (s, e) => _searchWindow = null;
         _searchWindow.Show();
@@ -149,6 +152,8 @@ public partial class MainWindow : Window
             ShowLoginWindow();
             return;
         }
+        // Note: When clicking tray menu, the target window is already lost
+        // User should use Ctrl+Shift+L for proper text insertion
         ShowSearchWindow();
     }
 

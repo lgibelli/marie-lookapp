@@ -147,14 +147,20 @@ public partial class SearchWindow : Window
         {
             var textToInsert = phrase.Text;
 
-            // Close window first so focus returns to previous app
+            // Detach the deactivated handler so closing doesn't interfere
+            Deactivated -= OnDeactivated;
+
+            // Close window first
             Close();
 
-            // Longer delay to ensure focus fully returns to target app
-            Task.Delay(200).ContinueWith(_ =>
+            // Use a timer to insert text after window fully closes
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+            timer.Tick += (s, e) =>
             {
-                Dispatcher.Invoke(() => App.TextInsertion.InsertText(textToInsert));
-            });
+                timer.Stop();
+                App.TextInsertion.InsertText(textToInsert);
+            };
+            timer.Start();
         }
     }
 }

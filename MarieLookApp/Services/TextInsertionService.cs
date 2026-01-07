@@ -14,65 +14,81 @@ public class TextInsertionService
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hWnd);
 
+    [DllImport("user32.dll")]
+    private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+
     private const byte VK_CONTROL = 0x11;
     private const byte VK_V = 0x56;
     private const uint KEYEVENTF_KEYUP = 0x0002;
 
+    // Store the target window before opening search
+    private IntPtr _targetWindow = IntPtr.Zero;
+
     /// <summary>
-    /// Insert text at the current cursor position by copying to clipboard
-    /// and simulating Ctrl+V
+    /// Call this BEFORE opening the search window to remember where to paste
+    /// </summary>
+    public void CaptureTargetWindow()
+    {
+        _targetWindow = GetForegroundWindow();
+    }
+
+    /// <summary>
+    /// Insert text at the cursor position in the previously captured target window
     /// </summary>
     public void InsertText(string text)
     {
-        // Store original clipboard content
-        string? originalClipboard = null;
-        try
+        if (_targetWindow == IntPtr.Zero)
         {
-            if (Clipboard.ContainsText())
-            {
-                originalClipboard = Clipboard.GetText();
-            }
+            // Fallback - just copy to clipboard
+            Clipboard.SetText(text);
+            return;
         }
-        catch { }
 
         try
         {
-            // Set our text to clipboard
+            // Set text to clipboard
             Clipboard.SetText(text);
 
-            // Ensure the foreground window has focus before sending keys
-            var foreground = GetForegroundWindow();
-            if (foreground != IntPtr.Zero)
-            {
-                SetForegroundWindow(foreground);
-            }
+            // Force focus back to target window
+            ForceForegroundWindow(_targetWindow);
 
-            // Delay to ensure clipboard and focus are ready
-            Thread.Sleep(100);
+            // Wait for focus to settle
+            Thread.Sleep(150);
 
             // Simulate Ctrl+V
             SimulateCtrlV();
-
-            // Small delay before restoring clipboard
-            Thread.Sleep(150);
+        }
+        catch
+        {
+            // If anything fails, at least the text is in clipboard
         }
         finally
         {
-            // Restore original clipboard content after a delay
-            if (originalClipboard != null)
-            {
-                Task.Delay(500).ContinueWith(_ =>
-                {
-                    try
-                    {
-                        Application.Current?.Dispatcher.Invoke(() =>
-                        {
-                            try { Clipboard.SetText(originalClipboard); } catch { }
-                        });
-                    }
-                    catch { }
-                });
-            }
+            _targetWindow = IntPtr.Zero;
+        }
+    }
+
+    private void ForceForegroundWindow(IntPtr hWnd)
+    {
+        var currentThread = GetCurrentThreadId();
+        var targetThread = GetWindowThreadProcessId(hWnd, out _);
+
+        // Attach to target thread to allow SetForegroundWindow
+        if (currentThread != targetThread)
+        {
+            AttachThreadInput(currentThread, targetThread, true);
+            SetForegroundWindow(hWnd);
+            AttachThreadInput(currentThread, targetThread, false);
+        }
+        else
+        {
+            SetForegroundWindow(hWnd);
         }
     }
 
