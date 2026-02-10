@@ -34,15 +34,13 @@ public class UpdateService
 
             var tagName = root.GetProperty("tag_name").GetString() ?? "";
             var latestVersion = tagName.TrimStart('v');
-            var htmlUrl = root.GetProperty("html_url").GetString() ?? "";
 
             if (IsNewerVersion(latestVersion, CurrentVersion))
             {
                 return new UpdateCheckResult
                 {
                     UpdateAvailable = true,
-                    NewVersion = latestVersion,
-                    ReleaseUrl = htmlUrl
+                    NewVersion = latestVersion
                 };
             }
 
@@ -78,6 +76,5 @@ public class UpdateCheckResult
 {
     public bool UpdateAvailable { get; set; }
     public string? NewVersion { get; set; }
-    public string? ReleaseUrl { get; set; }
     public string? Error { get; set; }
 }

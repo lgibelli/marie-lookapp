@@ -70,15 +70,13 @@ public class StorageService
         Save();
     }
 
-    public List<Phrase> GetPhrases() => _data.Phrases;
+    public IReadOnlyList<Phrase> GetPhrases() => _data.Phrases;
 
     public void SetPhrases(List<Phrase> phrases)
     {
         _data.Phrases = phrases;
         Save();
     }
-
-    public string? GetLastSyncTimestamp() => _data.LastSyncTimestamp;
 
     public void SetLastSyncTimestamp(string? timestamp)
     {

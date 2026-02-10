@@ -80,7 +80,7 @@ public class SearchService
     /// <summary>
     /// Search phrases and return matches sorted by relevance
     /// </summary>
-    public List<Phrase> Search(List<Phrase> phrases, string query, int limit = 20)
+    public List<Phrase> Search(IReadOnlyList<Phrase> phrases, string query, int limit = 20)
     {
         if (string.IsNullOrWhiteSpace(query))
         {
