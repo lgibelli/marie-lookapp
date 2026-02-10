@@ -1,86 +1,34 @@
+using System.ComponentModel;
 using System.Windows;
+using MarieLookApp.ViewModels;
 
 namespace MarieLookApp;
 
 public partial class LoginWindow : Window
 {
-    private string _email = string.Empty;
+    private readonly LoginViewModel _vm;
 
     public event Action? LoginSuccessful;
 
     public LoginWindow()
     {
+        _vm = new LoginViewModel(App.Supabase);
+        DataContext = _vm;
+
         InitializeComponent();
+
+        _vm.LoginSuccessful += () => LoginSuccessful?.Invoke();
+        _vm.CloseRequested += () => Close();
+        _vm.PropertyChanged += OnVmPropertyChanged;
+
         Loaded += (s, e) => EmailBox.Focus();
     }
 
-    private async void OnSendOtpClick(object sender, RoutedEventArgs e)
+    private void OnVmPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        _email = EmailBox.Text.Trim();
-
-        if (string.IsNullOrEmpty(_email) || !_email.Contains('@'))
+        if (e.PropertyName == nameof(LoginViewModel.IsOtpStep) && _vm.IsOtpStep)
         {
-            StatusText.Text = "Please enter a valid email address.";
-            return;
-        }
-
-        SendOtpButton.IsEnabled = false;
-        StatusText.Text = "";
-        StatusText.Foreground = System.Windows.Media.Brushes.Gray;
-        StatusText.Text = "Sending code...";
-
-        var result = await App.Supabase.SendOtpAsync(_email);
-
-        if (result.Success)
-        {
-            EmailPanel.Visibility = Visibility.Collapsed;
-            OtpPanel.Visibility = Visibility.Visible;
-            StatusText.Text = "";
             OtpBox.Focus();
         }
-        else
-        {
-            StatusText.Foreground = System.Windows.Media.Brushes.Red;
-            StatusText.Text = result.Error ?? "Failed to send code.";
-            SendOtpButton.IsEnabled = true;
-        }
-    }
-
-    private async void OnVerifyClick(object sender, RoutedEventArgs e)
-    {
-        var otp = OtpBox.Text.Trim();
-
-        if (string.IsNullOrEmpty(otp))
-        {
-            StatusText.Text = "Please enter the code.";
-            return;
-        }
-
-        VerifyButton.IsEnabled = false;
-        StatusText.Foreground = System.Windows.Media.Brushes.Gray;
-        StatusText.Text = "Verifying...";
-
-        var result = await App.Supabase.VerifyOtpAsync(_email, otp);
-
-        if (result.Success)
-        {
-            LoginSuccessful?.Invoke();
-            Close();
-        }
-        else
-        {
-            StatusText.Foreground = System.Windows.Media.Brushes.Red;
-            StatusText.Text = result.Error ?? "Invalid code.";
-            VerifyButton.IsEnabled = true;
-        }
-    }
-
-    private void OnBackClick(object sender, RoutedEventArgs e)
-    {
-        OtpPanel.Visibility = Visibility.Collapsed;
-        EmailPanel.Visibility = Visibility.Visible;
-        SendOtpButton.IsEnabled = true;
-        StatusText.Text = "";
-        OtpBox.Text = "";
     }
 }

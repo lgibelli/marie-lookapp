@@ -1,38 +1,33 @@
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
-using MarieLookApp.Models;
+using MarieLookApp.ViewModels;
 
 namespace MarieLookApp;
 
 public partial class SearchWindow : Window
 {
-    private readonly DispatcherTimer _debounceTimer;
-    private List<Phrase> _currentResults = new();
+    private readonly SearchViewModel _vm;
 
     public SearchWindow()
     {
+        _vm = new SearchViewModel(App.Storage, App.Search, App.Supabase, App.TextInsertion);
+        DataContext = _vm;
+
         InitializeComponent();
 
-        _debounceTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromMilliseconds(150)
-        };
-        _debounceTimer.Tick += OnDebounceTimerTick;
-
+        _vm.InsertTextRequested += OnInsertTextRequested;
         Loaded += OnLoaded;
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         SearchBox.Focus();
-        UpdateStatus();
+        _vm.Initialize();
     }
 
-    private void OnDeactivated(object sender, EventArgs e)
+    private void OnDeactivated(object? sender, EventArgs e)
     {
-        // Close when window loses focus
         Close();
     }
 
@@ -46,32 +41,19 @@ public partial class SearchWindow : Window
                 break;
 
             case Key.Down:
-                if (ResultsList.Items.Count > 0)
-                {
-                    ResultsList.Focus();
-                    if (ResultsList.SelectedIndex < 0)
-                    {
-                        ResultsList.SelectedIndex = 0;
-                    }
-                    else if (ResultsList.SelectedIndex < ResultsList.Items.Count - 1)
-                    {
-                        ResultsList.SelectedIndex++;
-                    }
-                }
+                ResultsList.Focus();
+                _vm.MoveDownCommand.Execute(null);
                 e.Handled = true;
                 break;
 
             case Key.Up:
-                if (ResultsList.Items.Count > 0 && ResultsList.SelectedIndex > 0)
-                {
-                    ResultsList.Focus();
-                    ResultsList.SelectedIndex--;
-                }
+                ResultsList.Focus();
+                _vm.MoveUpCommand.Execute(null);
                 e.Handled = true;
                 break;
 
             case Key.Enter:
-                SelectCurrentItem();
+                _vm.SelectItemCommand.Execute(null);
                 e.Handled = true;
                 break;
         }
@@ -81,87 +63,38 @@ public partial class SearchWindow : Window
     {
         if (e.Key == Key.Enter)
         {
-            SelectCurrentItem();
+            _vm.SelectItemCommand.Execute(null);
             e.Handled = true;
-        }
-    }
-
-    private void OnSearchTextChanged(object sender, TextChangedEventArgs e)
-    {
-        _debounceTimer.Stop();
-        _debounceTimer.Start();
-    }
-
-    private void OnDebounceTimerTick(object? sender, EventArgs e)
-    {
-        _debounceTimer.Stop();
-        PerformSearch();
-    }
-
-    private void PerformSearch()
-    {
-        var query = SearchBox.Text.Trim();
-        var phrases = App.Storage.GetPhrases();
-
-        if (string.IsNullOrEmpty(query))
-        {
-            _currentResults = phrases.Take(20).ToList();
-        }
-        else
-        {
-            _currentResults = App.Search.Search(phrases, query, 20);
-        }
-
-        ResultsList.ItemsSource = _currentResults;
-        UpdateStatus();
-
-        if (_currentResults.Count > 0)
-        {
-            ResultsList.SelectedIndex = 0;
-        }
-    }
-
-    private void UpdateStatus()
-    {
-        var phrases = App.Storage.GetPhrases();
-        var email = App.Supabase.GetEmail() ?? "Not logged in";
-
-        if (string.IsNullOrEmpty(SearchBox.Text))
-        {
-            StatusText.Text = $"{phrases.Count} phrases | {email}";
-        }
-        else
-        {
-            StatusText.Text = $"{_currentResults.Count} matches | {email}";
         }
     }
 
     private void OnResultDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        SelectCurrentItem();
+        _vm.SelectItemCommand.Execute(null);
     }
 
-    private void SelectCurrentItem()
+    private void OnInsertTextRequested(string text)
     {
-        if (ResultsList.SelectedItem is Phrase phrase)
+        Deactivated -= OnDeactivated;
+        Close();
+
+        var timer = new DispatcherTimer(DispatcherPriority.Normal, Application.Current.Dispatcher)
         {
-            var textToInsert = phrase.Text;
-
-            // Detach the deactivated handler so closing doesn't interfere
-            Deactivated -= OnDeactivated;
-
-            // Close window first
-            Close();
-
-            // Use a timer to insert text after window fully closes
-            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
-            timer.Tick += (s, e) =>
+            Interval = TimeSpan.FromMilliseconds(100)
+        };
+        timer.Tick += (s, e) =>
+        {
+            timer.Stop();
+            try
             {
-                timer.Stop();
-                App.TextInsertion.InsertText(textToInsert);
-            };
-            timer.Start();
-        }
+                _vm.PerformTextInsertion(text);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Text insertion failed: {ex}");
+            }
+        };
+        timer.Start();
     }
 }
 

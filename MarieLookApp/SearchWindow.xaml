@@ -40,8 +40,7 @@
                          Style="{StaticResource ModernTextBox}"
                          FontSize="16"
                          BorderThickness="0"
-                         Text=""
-                         TextChanged="OnSearchTextChanged">
+                         Text="{Binding SearchQuery, UpdateSourceTrigger=PropertyChanged}">
                     <TextBox.InputBindings>
                         <KeyBinding Key="Down" Command="{Binding MoveDownCommand}"/>
                         <KeyBinding Key="Up" Command="{Binding MoveUpCommand}"/>
@@ -55,6 +54,8 @@
                      BorderThickness="0"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                      ItemContainerStyle="{StaticResource ResultItem}"
+                     ItemsSource="{Binding Results}"
+                     SelectedIndex="{Binding SelectedIndex, Mode=TwoWay}"
                      MouseDoubleClick="OnResultDoubleClick"
                      KeyDown="OnResultKeyDown">
                 <ListBox.ItemTemplate>
@@ -76,8 +77,7 @@
 
             <!-- Status Bar -->
             <Border Grid.Row="2" BorderBrush="#E0E0E0" BorderThickness="0,1,0,0" Padding="15,10">
-                <TextBlock x:Name="StatusText"
-                           Text="Type to search..."
+                <TextBlock Text="{Binding StatusText}"
                            FontSize="12"
                            Foreground="#888"/>
             </Border>

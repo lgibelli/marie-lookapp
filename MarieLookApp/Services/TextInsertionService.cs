@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows;
 
@@ -35,7 +36,22 @@ public class TextInsertionService
     /// </summary>
     public void CaptureTargetWindow()
     {
-        _targetWindow = GetForegroundWindow();
+        var hwnd = GetForegroundWindow();
+
+        // If the foreground window belongs to our own process (e.g. tray menu),
+        // skip capture so InsertText falls back to clipboard-only mode
+        if (hwnd != IntPtr.Zero)
+        {
+            GetWindowThreadProcessId(hwnd, out uint windowProcessId);
+            var currentProcessId = (uint)Process.GetCurrentProcess().Id;
+            if (windowProcessId == currentProcessId)
+            {
+                _targetWindow = IntPtr.Zero;
+                return;
+            }
+        }
+
+        _targetWindow = hwnd;
     }
 
     /// <summary>

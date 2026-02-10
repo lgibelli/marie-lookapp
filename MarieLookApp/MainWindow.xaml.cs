@@ -1,5 +1,6 @@
 using System.Windows;
 using MarieLookApp.Services;
+using MarieLookApp.ViewModels;
 using Drawing = System.Drawing;
 
 namespace MarieLookApp;
@@ -7,12 +8,15 @@ namespace MarieLookApp;
 public partial class MainWindow : Window
 {
     private readonly HotkeyService _hotkeyService = new();
-    private readonly UpdateService _updateService = new();
+    private readonly MainViewModel _vm;
     private SearchWindow? _searchWindow;
     private LoginWindow? _loginWindow;
 
     public MainWindow()
     {
+        _vm = new MainViewModel(App.Supabase, new UpdateService());
+        _vm.ShowLoginRequested += ShowLoginWindow;
+
         InitializeComponent();
 
         // Create a simple tray icon at runtime
@@ -51,20 +55,28 @@ public partial class MainWindow : Window
                 "Hotkey Failed",
                 "Could not register Ctrl+Shift+L. Another app may be using it.",
                 Hardcodet.Wpf.TaskbarNotification.BalloonIcon.Warning);
+
+            MessageBox.Show(
+                "Could not register the Ctrl+Shift+L hotkey.\n\n" +
+                "Another application may already be using this shortcut.\n" +
+                "You can still use Marie LookApp from the tray icon.",
+                "Marie LookApp - Hotkey Registration Failed",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
         }
 
         // Subscribe to IPC events for context menu "open search" commands
         App.Ipc.OpenSearchRequested += OnHotkeyPressed;
 
         // Check if user is authenticated
-        if (!App.Supabase.IsAuthenticated)
+        if (!_vm.IsAuthenticated)
         {
             ShowLoginWindow();
         }
         else
         {
             // Sync phrases on startup
-            await SyncPhrasesAsync();
+            await _vm.SyncPhrasesAsync();
 
             // Open search window if started with --search flag
             if (App.OpenSearchOnStart)
@@ -79,7 +91,7 @@ public partial class MainWindow : Window
 
     private async Task CheckForUpdatesSilentAsync()
     {
-        var result = await _updateService.CheckForUpdateAsync();
+        var result = await _vm.CheckForUpdateSilentAsync();
         if (result.UpdateAvailable)
         {
             TrayIcon.ShowBalloonTip(
@@ -99,7 +111,7 @@ public partial class MainWindow : Window
 
     private void OnHotkeyPressed()
     {
-        if (!App.Supabase.IsAuthenticated)
+        if (!_vm.IsAuthenticated)
         {
             ShowLoginWindow();
             return;
@@ -136,93 +148,40 @@ public partial class MainWindow : Window
         _loginWindow = new LoginWindow();
         _loginWindow.LoginSuccessful += async () =>
         {
-            await SyncPhrasesAsync();
+            await _vm.SyncPhrasesAsync();
         };
         _loginWindow.Closed += (s, e) => _loginWindow = null;
         _loginWindow.Show();
         _loginWindow.Activate();
     }
 
-    private async Task SyncPhrasesAsync()
-    {
-        var result = await App.Supabase.FetchPhrasesAsync();
-        if (!result.Success)
-        {
-            // Silent failure on auto-sync
-            System.Diagnostics.Debug.WriteLine($"Sync failed: {result.Error}");
-        }
-    }
-
     private void OnSearchClick(object sender, RoutedEventArgs e)
     {
-        if (!App.Supabase.IsAuthenticated)
+        if (!_vm.IsAuthenticated)
         {
             ShowLoginWindow();
             return;
         }
-        // Note: When clicking tray menu, the target window is already lost
-        // User should use Ctrl+Shift+L for proper text insertion
         ShowSearchWindow();
     }
 
-    private async void OnSyncClick(object sender, RoutedEventArgs e)
+    private void OnSyncClick(object sender, RoutedEventArgs e)
     {
-        if (!App.Supabase.IsAuthenticated)
-        {
-            MessageBox.Show("Please log in first.", "Marie LookApp", MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-
-        var result = await App.Supabase.FetchPhrasesAsync();
-        if (result.Success)
-        {
-            MessageBox.Show($"Synced {result.Phrases?.Count ?? 0} phrases.", "Marie LookApp", MessageBoxButton.OK, MessageBoxImage.Information);
-        }
-        else
-        {
-            MessageBox.Show($"Sync failed: {result.Error}", "Marie LookApp", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
+        _vm.SyncCommand.Execute(null);
     }
 
-    private async void OnCheckUpdateClick(object sender, RoutedEventArgs e)
+    private void OnCheckUpdateClick(object sender, RoutedEventArgs e)
     {
-        var result = await _updateService.CheckForUpdateAsync();
-
-        if (result.Error != null)
-        {
-            MessageBox.Show($"Could not check for updates: {result.Error}", "Marie LookApp", MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
-        else if (result.UpdateAvailable)
-        {
-            var response = MessageBox.Show(
-                $"Version {result.NewVersion} is available (you have {_updateService.CurrentVersion}).\n\nWould you like to download it now?",
-                "Update Available",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Information);
-
-            if (response == MessageBoxResult.Yes)
-            {
-                UpdateService.OpenReleasesPage();
-            }
-        }
-        else
-        {
-            MessageBox.Show($"You're up to date! (v{_updateService.CurrentVersion})", "Marie LookApp", MessageBoxButton.OK, MessageBoxImage.Information);
-        }
+        _vm.CheckUpdateCommand.Execute(null);
     }
 
     private void OnLogoutClick(object sender, RoutedEventArgs e)
     {
-        var result = MessageBox.Show("Are you sure you want to logout?", "Marie LookApp", MessageBoxButton.YesNo, MessageBoxImage.Question);
-        if (result == MessageBoxResult.Yes)
-        {
-            App.Supabase.Logout();
-            ShowLoginWindow();
-        }
+        _vm.LogoutCommand.Execute(null);
     }
 
     private void OnExitClick(object sender, RoutedEventArgs e)
     {
-        Application.Current.Shutdown();
+        _vm.ExitCommand.Execute(null);
     }
 }

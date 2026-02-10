@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Threading;
 using MarieLookApp.Services;
 
 namespace MarieLookApp;
@@ -16,6 +17,8 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        DispatcherUnhandledException += OnDispatcherUnhandledException;
 
         bool hasSearchArg = e.Args.Contains("--search");
 
@@ -46,5 +49,16 @@ public partial class App : Application
     {
         Ipc.Dispose();
         base.OnExit(e);
+    }
+
+    private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
+    {
+        System.Diagnostics.Debug.WriteLine($"Unhandled exception: {e.Exception}");
+        MessageBox.Show(
+            $"An unexpected error occurred:\n{e.Exception.Message}",
+            "Marie LookApp - Error",
+            MessageBoxButton.OK,
+            MessageBoxImage.Error);
+        e.Handled = true;
     }
 }
