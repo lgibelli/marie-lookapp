@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Marie Lookup — Manage Entries</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body class="manage">
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <button id="new-btn">+ New</button>
+        <input id="filter" type="text" placeholder="Filter…" />
+      </div>
+      <div id="list" class="sidebar-list"></div>
+    </aside>
+    <main id="editor" class="editor">
+      <div id="placeholder" class="editor-placeholder">
+        Select an entry on the left, or click <strong>+ New</strong> to add one.
+      </div>
+      <input id="title" class="title" type="text" placeholder="Title" style="display:none" />
+      <textarea id="body" class="body" placeholder="Body…" style="display:none"></textarea>
+      <div id="actions" class="editor-actions" style="display:none">
+        <button id="delete-btn" class="danger">Delete</button>
+        <button id="save-btn" class="primary">Save</button>
+      </div>
+    </main>
+    <script src="manage.js"></script>
+  </body>
+</html>
