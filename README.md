@@ -88,6 +88,38 @@ First run downloads ~700 MB of MSVC headers via `cargo-xwin` into
 `~/.cache/cargo-xwin/` and recompiles every dependency for the chosen
 target (5–15 min). Subsequent builds are fast.
 
+## Build a Windows installer (NSIS)
+
+Wraps the x64 `.exe` in an NSIS installer that runs the WebView2 bootstrapper
+at install time if the runtime isn't already present — so the installer is
+small (~6 MB) and the end user needs no external downloads.
+
+One-time setup:
+
+```bash
+sudo port install nsis      # MacPorts (preferred on this machine)
+# or:
+brew install makensis       # Homebrew
+```
+
+Then:
+
+```bash
+BUILD_INSTALLER=1 scripts/build-windows.sh release x64
+```
+
+Output: `src-tauri/target/marie-lookup-setup-<version>.exe`. Per-user install
+(no UAC prompt). Adds a Start Menu shortcut and an entry under Settings →
+Apps for clean uninstall. The first run also downloads the WebView2
+bootstrapper (~2 MB) from Microsoft into `~/.cache/marie-lookup/`.
+
+## Launch at login
+
+Toggleable inside the app: open the *Manage entries* window → the sidebar
+footer has a **Launch at login** checkbox. On macOS this writes a LaunchAgent
+plist; on Windows it writes an `HKCU\...\Run` entry. Backed by Tauri's
+`autostart` plugin — no installer step required.
+
 ## Default hotkey
 
 - macOS: **⌘⌥M** (Cmd+Option+M)

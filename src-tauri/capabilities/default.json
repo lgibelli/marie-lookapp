@@ -4,6 +4,7 @@
   "description": "Default capabilities for lookup and manage windows",
   "windows": ["lookup", "manage"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "autostart:default"
   ]
 }
