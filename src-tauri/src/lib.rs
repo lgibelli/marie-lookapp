@@ -128,8 +128,54 @@ fn delete_entry(db: tauri::State<Db>, id: i64) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn accessibility_ok(prompt: bool) -> bool {
+    use macos_accessibility_client::accessibility::{
+        application_is_trusted, application_is_trusted_with_prompt,
+    };
+    if prompt {
+        application_is_trusted_with_prompt()
+    } else {
+        application_is_trusted()
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn accessibility_ok(_prompt: bool) -> bool {
+    true
+}
+
+#[tauri::command]
+fn check_accessibility(prompt: bool) -> bool {
+    accessibility_ok(prompt)
+}
+
+#[tauri::command]
+fn open_accessibility_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn paste_text(app: tauri::AppHandle, text: String) -> Result<(), String> {
+    // Check Accessibility permission BEFORE hiding our window, so the user
+    // can read the inline hint we'll show if it's missing.
+    #[cfg(target_os = "macos")]
+    if !accessibility_ok(true) {
+        // application_is_trusted_with_prompt has just shown the system dialog.
+        // Also open the Accessibility settings pane directly for a clear path.
+        let _ = std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            .spawn();
+        return Err("accessibility_required".into());
+    }
+
     let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     cb.set_text(text).map_err(|e| e.to_string())?;
     drop(cb);
@@ -142,23 +188,29 @@ async fn paste_text(app: tauri::AppHandle, text: String) -> Result<(), String> {
         let _ = app.hide();
     }
 
-    std::thread::sleep(std::time::Duration::from_millis(180));
+    // Give the OS time to transfer focus back to the previous app.
+    tokio::time::sleep(std::time::Duration::from_millis(180)).await;
 
-    use enigo::{Direction, Enigo, Key, Keyboard, Settings};
-    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
-    #[cfg(target_os = "macos")]
-    let modifier = Key::Meta;
-    #[cfg(not(target_os = "macos"))]
-    let modifier = Key::Control;
-    enigo
-        .key(modifier, Direction::Press)
-        .map_err(|e| e.to_string())?;
-    enigo
-        .key(Key::Unicode('v'), Direction::Click)
-        .map_err(|e| e.to_string())?;
-    enigo
-        .key(modifier, Direction::Release)
-        .map_err(|e| e.to_string())?;
+    // enigo on macOS calls TSMGetInputSourceProperty which asserts main-thread.
+    // Dispatch the keystroke to the main thread so it doesn't trap.
+    app.run_on_main_thread(move || {
+        use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+        let mut enigo = match Enigo::new(&Settings::default()) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("enigo init failed: {e}");
+                return;
+            }
+        };
+        #[cfg(target_os = "macos")]
+        let modifier = Key::Meta;
+        #[cfg(not(target_os = "macos"))]
+        let modifier = Key::Control;
+        let _ = enigo.key(modifier, Direction::Press);
+        let _ = enigo.key(Key::Unicode('v'), Direction::Click);
+        let _ = enigo.key(modifier, Direction::Release);
+    })
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -211,10 +263,15 @@ pub fn run() {
             let conn = open_db(&path).expect("open db");
             app.manage(Db(Mutex::new(conn)));
 
-            // Tray menu
-            let show_item = MenuItemBuilder::with_id("show", "Lookup…").build(app)?;
+            // Tray menu. The accelerator on "Lookup…" is purely a visual hint —
+            // the real global hotkey is registered below via the plugin.
+            let show_item = MenuItemBuilder::with_id("show", "Lookup…")
+                .accelerator("CmdOrCtrl+Alt+M")
+                .build(app)?;
             let manage_item = MenuItemBuilder::with_id("manage", "Manage entries…").build(app)?;
-            let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", "Quit")
+                .accelerator("CmdOrCtrl+Q")
+                .build(app)?;
             let menu = MenuBuilder::new(app)
                 .items(&[&show_item, &manage_item])
                 .separator()
@@ -238,14 +295,15 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // Register the global shortcut
+            // Register the global hotkey: Cmd+Option+M (macOS) / Ctrl+Alt+M (win/linux).
+            // M = Marie. Avoids Cmd+Space (Spotlight) and Cmd+Shift+Space (Character Viewer).
             #[cfg(desktop)]
             {
                 #[cfg(target_os = "macos")]
-                let shortcut = Shortcut::new(Some(Modifiers::META | Modifiers::SHIFT), Code::Space);
+                let shortcut = Shortcut::new(Some(Modifiers::META | Modifiers::ALT), Code::KeyM);
                 #[cfg(not(target_os = "macos"))]
                 let shortcut =
-                    Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Space);
+                    Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyM);
                 app.global_shortcut().register(shortcut)?;
             }
 
@@ -265,6 +323,11 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             {
                 let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+                // Trigger the macOS Accessibility-permission prompt on first launch.
+                // If already trusted, this is a silent no-op. If not, the standard
+                // system dialog appears with an "Open System Settings" button.
+                let _ = accessibility_ok(true);
             }
 
             Ok(())
@@ -278,6 +341,8 @@ pub fn run() {
             paste_text,
             hide_lookup,
             open_manage,
+            check_accessibility,
+            open_accessibility_settings,
         ])
         .on_window_event(|window, event| {
             // Keep the app running when the manage window is closed:

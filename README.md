@@ -40,10 +40,61 @@ npm run build
 Produces a `.app` (macOS), `.msi` / `.exe` (Windows), or `.AppImage` / `.deb`
 (Linux) in `src-tauri/target/release/bundle/`.
 
+## Cross-compile from macOS to Windows
+
+For testing the Windows build without a Windows machine. Produces just the
+`.exe` (the `.msi` installer step needs WiX, which runs only on Windows).
+
+One-time setup:
+
+```bash
+~/.cargo/bin/rustup target add x86_64-pc-windows-msvc
+~/.cargo/bin/rustup target add aarch64-pc-windows-msvc   # only if you want native ARM64
+~/.cargo/bin/rustup component add llvm-tools-preview
+~/.cargo/bin/cargo install --locked cargo-xwin
+```
+
+You also need `llvm-rc` (the Windows resource compiler) somewhere on disk
+— `rustup`'s `llvm-tools-preview` doesn't ship it. Any of these work:
+
+- An installed Android NDK (`~/Library/Android/sdk/ndk/.../llvm-rc`)
+- `brew install llvm` (`/opt/homebrew/opt/llvm/bin/llvm-rc`)
+- `sudo port install llvm-22` (or any recent llvm-*)
+
+The script auto-discovers any of those.
+
+Then:
+
+```bash
+scripts/build-windows.sh                 # release, x86_64
+scripts/build-windows.sh release arm64   # release, aarch64
+scripts/build-windows.sh release all     # both archs
+scripts/build-windows.sh debug           # debug build, x86_64
+```
+
+Output:
+- `src-tauri/target/x86_64-pc-windows-msvc/release/marie-lookup.exe`
+- `src-tauri/target/aarch64-pc-windows-msvc/release/marie-lookup.exe`
+
+Each `.exe` is self-contained (frontend + icon embedded). WebView2 must be
+present on the target Windows machine — it ships pre-installed on Windows
+11 and on most Windows 10 installs.
+
+A x86_64 build runs on ARM64 Windows under Microsoft's built-in emulator
+("Prism") with negligible overhead for a tray app. Build the `aarch64`
+target only if you want fully native ARM performance.
+
+First run downloads ~700 MB of MSVC headers via `cargo-xwin` into
+`~/.cache/cargo-xwin/` and recompiles every dependency for the chosen
+target (5–15 min). Subsequent builds are fast.
+
 ## Default hotkey
 
-- macOS: **⌘⇧Space**
-- Windows / Linux: **Ctrl+Shift+Space**
+- macOS: **⌘⌥M** (Cmd+Option+M)
+- Windows / Linux: **Ctrl+Alt+M**
+
+Chosen to avoid ⌘Space (Spotlight), ⌘⇧Space (Character Viewer), and the
+usual launcher-app bindings (Alfred, Raycast).
 
 ## macOS first-launch note
 
