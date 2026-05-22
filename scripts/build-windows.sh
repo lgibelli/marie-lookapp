@@ -121,7 +121,52 @@ for p in "${BUILT_PATHS[@]}"; do
   echo " built: ${p}  ($(du -h "${p}" | cut -f1))"
 done
 echo "================================================================"
+
+# --- Optional: wrap the x64 .exe in an NSIS installer ---
+# Triggered when env BUILD_INSTALLER=1 (set by user) and makensis is on PATH.
+if [ "${BUILD_INSTALLER:-0}" = "1" ]; then
+  if ! command -v makensis >/dev/null 2>&1; then
+    echo
+    echo "warning: BUILD_INSTALLER=1 but makensis not found. install NSIS:"
+    echo "         sudo port install nsis    (MacPorts)"
+    echo "         brew install makensis     (Homebrew)"
+    exit 1
+  fi
+
+  X64_EXE="${PROJECT_ROOT}/src-tauri/target/x86_64-pc-windows-msvc/${PROFILE_DIR}/marie-lookup.exe"
+  if [ ! -f "${X64_EXE}" ]; then
+    echo "warning: x64 .exe not in this build (need it for the installer). re-run with 'all' or 'x64'." >&2
+    exit 1
+  fi
+
+  WV2_BOOTSTRAPPER="${HOME}/.cache/marie-lookup/MicrosoftEdgeWebview2Setup.exe"
+  if [ ! -f "${WV2_BOOTSTRAPPER}" ]; then
+    echo
+    echo ">> downloading WebView2 bootstrapper from Microsoft (one-time, cached at ${WV2_BOOTSTRAPPER})"
+    mkdir -p "$(dirname "${WV2_BOOTSTRAPPER}")"
+    curl -fsSL -o "${WV2_BOOTSTRAPPER}" \
+      "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+  fi
+
+  APP_VERSION="$(node -e "console.log(require('${PROJECT_ROOT}/package.json').version)")"
+  OUT_FILE="${PROJECT_ROOT}/src-tauri/target/marie-lookup-setup-${APP_VERSION}.exe"
+
+  echo
+  echo ">> compiling NSIS installer (version ${APP_VERSION})"
+  makensis -V2 \
+    "-DAPP_VERSION=${APP_VERSION}" \
+    "-DAPP_EXE_PATH=${X64_EXE}" \
+    "-DWEBVIEW2_BOOTSTRAPPER=${WV2_BOOTSTRAPPER}" \
+    "-DICON_PATH=${PROJECT_ROOT}/src-tauri/icons/icon.ico" \
+    "-DOUT_FILE=${OUT_FILE}" \
+    "${PROJECT_ROOT}/scripts/installer.nsi"
+
+  echo
+  echo " installer: ${OUT_FILE}  ($(du -h "${OUT_FILE}" | cut -f1))"
+  echo "================================================================"
+fi
+
 echo
 echo "Each .exe is self-contained (frontend + icon embedded)."
-echo "Note: this produces just .exe(s), not .msi installer(s)."
-echo "MSI bundling needs WiX, which only runs on Windows."
+echo "For an NSIS installer that bundles a WebView2 bootstrapper, re-run with"
+echo "  BUILD_INSTALLER=1 scripts/build-windows.sh release x64"

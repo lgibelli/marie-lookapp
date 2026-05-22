@@ -1,5 +1,6 @@
 const { invoke } = window.__TAURI__.core;
 
+const $autostart = document.getElementById("autostart");
 const $list = document.getElementById("list");
 const $filter = document.getElementById("filter");
 const $newBtn = document.getElementById("new-btn");
@@ -134,4 +135,28 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+async function refreshAutostart() {
+  try {
+    $autostart.checked = await invoke("plugin:autostart|is_enabled");
+  } catch (e) {
+    console.error("autostart check failed", e);
+    $autostart.disabled = true;
+  }
+}
+
+$autostart.addEventListener("change", async () => {
+  try {
+    if ($autostart.checked) {
+      await invoke("plugin:autostart|enable");
+    } else {
+      await invoke("plugin:autostart|disable");
+    }
+  } catch (e) {
+    console.error("autostart toggle failed", e);
+    $autostart.checked = !$autostart.checked;
+    alert("Couldn't update launch-at-login setting: " + e);
+  }
+});
+
 refresh();
+refreshAutostart();
