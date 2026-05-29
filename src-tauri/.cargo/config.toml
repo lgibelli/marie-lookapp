@@ -1,0 +1,9 @@
+# Statically link the MSVC C runtime so the .exe doesn't depend on
+# VCRUNTIME140.dll / VCRUNTIME140_1.dll being installed on the target box
+# (i.e., the VC++ 2015-2022 Redistributable). Otherwise the loader fails
+# silently — no tray icon, no Event Viewer entry, no stderr.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

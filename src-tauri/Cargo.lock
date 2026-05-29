@@ -2004,7 +2004,6 @@ dependencies = [
  "macos-accessibility-client",
  "rusqlite",
  "serde",
- "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",

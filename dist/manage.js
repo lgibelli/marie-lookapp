@@ -6,8 +6,6 @@ const $filter = document.getElementById("filter");
 const $newBtn = document.getElementById("new-btn");
 const $title = document.getElementById("title");
 const $body = document.getElementById("body");
-const $placeholder = document.getElementById("placeholder");
-const $actions = document.getElementById("actions");
 const $saveBtn = document.getElementById("save-btn");
 const $deleteBtn = document.getElementById("delete-btn");
 
@@ -52,18 +50,11 @@ function renderList() {
   }
 }
 
-function showEditor() {
-  $placeholder.style.display = "none";
-  $title.style.display = "";
-  $body.style.display = "";
-  $actions.style.display = "";
-}
-
-function hideEditor() {
-  $placeholder.style.display = "";
-  $title.style.display = "none";
-  $body.style.display = "none";
-  $actions.style.display = "none";
+// Editor visibility is driven by CSS classes on <body> (see style.css):
+//   editing       — fields shown instead of the placeholder
+//   has-selection — an existing entry is loaded (reveals the Delete button)
+function isEditing() {
+  return document.body.classList.contains("editing");
 }
 
 function selectEntry(id) {
@@ -72,8 +63,7 @@ function selectEntry(id) {
   selectedId = id;
   $title.value = e.title;
   $body.value = e.body;
-  $deleteBtn.style.display = "";
-  showEditor();
+  document.body.classList.add("editing", "has-selection");
   renderList();
 }
 
@@ -81,8 +71,8 @@ function newEntry() {
   selectedId = null;
   $title.value = "";
   $body.value = "";
-  $deleteBtn.style.display = "none";
-  showEditor();
+  document.body.classList.add("editing");
+  document.body.classList.remove("has-selection");
   renderList();
   setTimeout(() => $title.focus(), 0);
 }
@@ -111,8 +101,8 @@ async function del() {
   if (!confirm("Delete this entry?")) return;
   try {
     await invoke("delete_entry", { id: selectedId });
-    selectedId = undefined;
-    hideEditor();
+    selectedId = null;
+    document.body.classList.remove("editing", "has-selection");
     await refresh();
   } catch (e) {
     console.error("delete failed", e);
@@ -128,7 +118,7 @@ $filter.addEventListener("input", renderList);
 document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === "s") {
     e.preventDefault();
-    if ($title.style.display !== "none") save();
+    if (isEditing()) save();
   } else if ((e.metaKey || e.ctrlKey) && e.key === "n") {
     e.preventDefault();
     newEntry();

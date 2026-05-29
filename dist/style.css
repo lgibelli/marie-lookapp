@@ -250,3 +250,17 @@ body.manage {
   color: var(--fg-dim);
   text-align: center;
 }
+
+/* Editor visibility. The editor shows a placeholder until an entry is selected
+   or a new one is started; toggling `editing` on <body> swaps placeholder ↔
+   fields, and `has-selection` reveals the Delete button (only existing entries
+   can be deleted). Replaces the per-element style.display toggling in manage.js. */
+.editor .title,
+.editor .body,
+.editor .editor-actions { display: none; }
+.editing .editor .editor-placeholder { display: none; }
+.editing .editor .title { display: block; }
+.editing .editor .body { display: block; }
+.editing .editor .editor-actions { display: flex; }
+#delete-btn { display: none; }
+.has-selection #delete-btn { display: inline-block; }

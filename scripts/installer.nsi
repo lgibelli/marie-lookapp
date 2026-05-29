@@ -13,7 +13,7 @@
 ;   OUT_FILE      absolute path of the installer .exe to produce
 
 !define APP_NAME "Marie LookApp"
-!define APP_PUBLISHER "lgibelli"
+!define APP_PUBLISHER "Luca Gibelli"
 !define APP_REG_ROOT "HKCU"
 !define APP_REG_UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\MarieLookApp"
 
