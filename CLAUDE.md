@@ -21,7 +21,8 @@ No test suite yet.
 - `dist/` — static HTML/CSS/JS frontend, served directly to WKWebView /
   WebView2. No Vite, no React, no bundler.
 - `scripts/` — `make_icons.py` (PIL+iconutil), `build-windows.sh` (cross
-  compile via cargo-xwin).
+  compile via cargo-xwin), `sign-windows.sh` (Authenticode sign via Azure
+  Trusted Signing).
 - `package.json` exists **only** to host `@tauri-apps/cli` for the `tauri`
   command. Don't add runtime JS deps.
 
@@ -74,6 +75,12 @@ this Mac. **Read it before tweaking.** Key things:
   bundle path because it can't be driven through `cargo-xwin`.
 - `.msi` bundling needs WiX, which only runs on Windows. We don't ship MSI
   from Mac.
+- **CRT is statically linked** (`src-tauri/.cargo/config.toml` sets
+  `target-feature=+crt-static` for both Windows targets). Without it the
+  `.exe` would import `VCRUNTIME140.dll` / `VCRUNTIME140_1.dll` and fail
+  silently on machines without the VC++ Redistributable — no Event Viewer
+  entry, no stderr. Don't remove this without also bundling vc_redist in
+  the installer.
 
 ## Autostart
 
@@ -95,11 +102,55 @@ No wrapper Rust commands needed.
 - Release flow:
   ```bash
   scripts/build-windows.sh release all
+  scripts/sign-windows.sh \
+    src-tauri/target/x86_64-pc-windows-msvc/release/marie-lookup.exe \
+    src-tauri/target/aarch64-pc-windows-msvc/release/marie-lookup.exe
+  BUILD_INSTALLER=1 scripts/build-windows.sh release x64   # wraps signed x64
+  scripts/sign-windows.sh src-tauri/target/marie-lookup-setup-X.Y.Z.exe
   gh release create vX.Y.Z --repo lgibelli/marie-lookapp-releases \
     --title "..." --notes-file NOTES.md --prerelease \
     src-tauri/target/x86_64-pc-windows-msvc/release/marie-lookup.exe#marie-lookup-windows-x64.exe \
-    src-tauri/target/aarch64-pc-windows-msvc/release/marie-lookup.exe#marie-lookup-windows-arm64.exe
+    src-tauri/target/aarch64-pc-windows-msvc/release/marie-lookup.exe#marie-lookup-windows-arm64.exe \
+    src-tauri/target/marie-lookup-setup-X.Y.Z.exe#marie-lookup-setup-X.Y.Z.exe
   ```
+
+## Code signing (Windows)
+
+Windows binaries are Authenticode-signed with **Azure Trusted Signing**
+(individual cert, subject "Luca Gibelli") via `jsign`. All signing happens
+on this Mac — no hardware token, no Windows box required.
+
+**One-time setup**:
+
+1. Azure Trusted Signing account + Public Trust certificate profile,
+   created in the Azure portal. Identity validation (passport + selfie)
+   takes a few business days to a couple of weeks; Microsoft reviews
+   manually.
+2. Install tooling: `sudo port install jsign azure-cli osslsigncode`
+   (or the Homebrew equivalents). `osslsigncode` is optional — only used
+   for `verify`.
+3. `az login` once interactively. Azure CLI caches the session in
+   `~/.azure/`.
+4. Stash the non-secret endpoint/account/profile config in the login
+   keychain:
+   ```bash
+   security add-generic-password -U \
+     -a "$USER" -s "marie-lookup-signing" \
+     -w '{"endpoint":"https://<region>.codesigning.azure.net","account":"<account>","profile":"<profile>"}'
+   ```
+
+`scripts/sign-windows.sh` reads the keychain item and fetches a fresh
+access token via `az account get-access-token` on each run (tokens expire
+in ~1h, no caching). No secrets in the repo, no secrets in env.
+
+**Order matters**: sign the inner `marie-lookup.exe` *before* re-running
+`makensis`, so the installer embeds an already-signed binary. Then sign
+the installer itself. See the release flow above.
+
+The NSIS uninstaller (`uninstall.exe`) is generated at install time on
+the user's machine and is intentionally left unsigned — Windows doesn't
+SmartScreen-warn on uninstall flows, and the two-pass signing dance isn't
+worth the complexity.
 
 ## Don't
 
