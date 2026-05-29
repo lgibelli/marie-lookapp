@@ -1,0 +1,106 @@
+name: Build & release Windows binaries
+
+# Builds the unsigned Windows .exe for x64 + arm64 and publishes them as a
+# GitHub Release in the SEPARATE binaries repo (lgibelli/marie-lookapp-releases),
+# matching the manual release flow in CLAUDE.md.
+#
+# Trigger: push a version tag, e.g.  git tag v2.0.0-pre3 && git push origin v2.0.0-pre3
+#
+# Requires a repo secret RELEASES_TOKEN: a fine-grained PAT with
+# Contents: Read and write on lgibelli/marie-lookapp-releases (the built-in
+# GITHUB_TOKEN cannot write to a different repo). See CLAUDE.md.
+#
+# Cost note: this repo is private, so Windows runners bill at 2x minutes.
+# Only the two build jobs use Windows; the publish job runs on Linux (1x).
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            arch: x64
+            msvc: amd64
+          - target: aarch64-pc-windows-msvc
+            arch: arm64
+            msvc: amd64_arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      # Activate the MSVC toolchain for the build's target so the rusqlite
+      # `bundled` feature can compile sqlite3.c (arm64 needs the cross compiler).
+      - name: Set up MSVC (${{ matrix.msvc }})
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.msvc }}
+
+      - name: Build release
+        working-directory: src-tauri
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # crt-static (src-tauri/.cargo/config.toml) is picked up automatically.
+      - name: Stage artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cp "src-tauri/target/${{ matrix.target }}/release/marie-lookup.exe" \
+             "out/marie-lookup-windows-${{ matrix.arch }}.exe"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: marie-lookup-windows-${{ matrix.arch }}
+          path: out/marie-lookup-windows-${{ matrix.arch }}.exe
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release in marie-lookapp-releases
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          SRC_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::RELEASES_TOKEN secret is not set — see CLAUDE.md for how to create it." >&2
+            exit 1
+          fi
+          # Mark semver pre-releases (any tag with a hyphen, e.g. v2.0.0-pre3).
+          prerelease=()
+          case "$TAG" in
+            *-*) prerelease=(--prerelease) ;;
+          esac
+          gh release create "$TAG" \
+            --repo lgibelli/marie-lookapp-releases \
+            --title "Marie LookApp $TAG" \
+            --notes "Automated **unsigned** Windows build for \`$TAG\`. Built from lgibelli/marie-lookapp@\`$SRC_SHA\`. Windows SmartScreen will warn on first run." \
+            "${prerelease[@]}" \
+            "artifacts/marie-lookup-windows-x64.exe#marie-lookup-windows-x64.exe" \
+            "artifacts/marie-lookup-windows-arm64.exe#marie-lookup-windows-arm64.exe"
