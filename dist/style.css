@@ -108,6 +108,21 @@ body.lookup {
   background: var(--bg-elev);
 }
 
+/* Accessibility-permission hint shown in the lookup body when paste is blocked.
+   These were inline styles in lookup.js; moved here so the CSP can forbid
+   inline styles entirely (no 'unsafe-inline'). */
+.ax-hint-title { margin: 0 0 8px; }
+.ax-hint-text { margin: 0 0 12px; }
+.ax-hint-btn {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+  font-size: 13px;
+}
+
 /* ---------- Manage window ---------- */
 body.manage {
   display: grid;
