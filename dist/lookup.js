@@ -96,18 +96,16 @@ function showAccessibilityHint() {
   $body.classList.remove("empty");
   $body.replaceChildren();
   const title = document.createElement("h3");
-  title.style.margin = "0 0 8px";
+  title.className = "ax-hint-title";
   title.textContent = "Accessibility permission needed";
   const p1 = document.createElement("p");
-  p1.style.margin = "0 0 12px";
+  p1.className = "ax-hint-text";
   p1.textContent =
     "Marie pastes by simulating ⌘V, which macOS only allows for apps in Accessibility. " +
     "System Settings just opened to the right pane — enable marie-lookup, then come back here and press Enter again.";
   const btn = document.createElement("button");
+  btn.className = "ax-hint-btn";
   btn.textContent = "Re-open Accessibility settings";
-  btn.style.cssText =
-    "padding:6px 12px;border-radius:6px;border:1px solid var(--border);" +
-    "background:var(--accent);color:white;cursor:pointer;font-size:13px;";
   btn.addEventListener("click", () => invoke("open_accessibility_settings"));
   $body.append(title, p1, btn);
   $matches.replaceChildren();

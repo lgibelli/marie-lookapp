@@ -159,16 +159,21 @@ fn search_entries(db: tauri::State<Db>, query: String) -> Result<Vec<Entry>, App
     if q.is_empty() {
         return Ok(Vec::new());
     }
-    // SQLite's LIKE is ASCII case-insensitive by default. Compare the raw column
-    // against the raw needle so both sides fold identically. (The previous code
+    // SQLite's LIKE is ASCII case-insensitive by default. Compare the column
+    // against the needle so both sides fold identically. (The previous code
     // lowercased the needle in Rust — full Unicode — but wrapped the column in
     // SQLite LOWER() — ASCII only — so accented text matched inconsistently.)
-    let like = format!("%{}%", q);
+    //
+    // Escape LIKE metacharacters (\ % _) so a user typing them searches for the
+    // literal character instead of a wildcard; pair with an explicit ESCAPE
+    // clause. Backslash is escaped first so we don't double-escape the rest.
+    let escaped = q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    let like = format!("%{}%", escaped);
     let conn = db.0.lock()?;
     let mut stmt = conn.prepare(
         "SELECT id, title, body FROM entries \
-         WHERE title LIKE ?1 OR body LIKE ?1 \
-         ORDER BY (title LIKE ?1) DESC, updated_at DESC \
+         WHERE title LIKE ?1 ESCAPE '\\' OR body LIKE ?1 ESCAPE '\\' \
+         ORDER BY (title LIKE ?1 ESCAPE '\\') DESC, updated_at DESC \
          LIMIT 20",
     )?;
     let entries = stmt
