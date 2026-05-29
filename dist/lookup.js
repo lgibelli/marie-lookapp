@@ -19,8 +19,7 @@ function renderMatches() {
     el.addEventListener("mousedown", (e) => {
       e.preventDefault();
       activeIdx = i;
-      renderMatches();
-      renderBody();
+      render();
     });
     $matches.appendChild(el);
   });
@@ -38,13 +37,24 @@ function renderBody() {
   $body.textContent = results[activeIdx].body;
 }
 
+function render() {
+  renderMatches();
+  renderBody();
+}
+
+// Move the selection by `delta` (wrapping). No-op with 0 or 1 results.
+function move(delta) {
+  if (results.length <= 1) return;
+  activeIdx = (activeIdx + delta + results.length) % results.length;
+  render();
+}
+
 async function doSearch() {
   const q = $search.value.trim();
   if (!q) {
     results = [];
     activeIdx = 0;
-    renderMatches();
-    renderBody();
+    render();
     return;
   }
   try {
@@ -54,8 +64,7 @@ async function doSearch() {
     results = [];
   }
   activeIdx = 0;
-  renderMatches();
-  renderBody();
+  render();
 }
 
 $search.addEventListener("input", () => {
@@ -71,7 +80,10 @@ async function paste() {
   try {
     await invoke("paste_text", { text });
   } catch (e) {
-    if (typeof e === "string" && e === "accessibility_required") {
+    // CONTRACT: this string matches ERR_ACCESSIBILITY returned by paste_text in
+    // src-tauri/src/lib.rs. Keep both sides in sync — there's no shared module
+    // across the Rust↔JS boundary.
+    if (e === "accessibility_required") {
       showAccessibilityHint();
       return;
     }
@@ -114,8 +126,7 @@ function resetUI() {
   $search.value = "";
   results = [];
   activeIdx = 0;
-  renderMatches();
-  renderBody();
+  render();
 }
 
 document.addEventListener("keydown", (e) => {
@@ -126,19 +137,13 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     paste();
   } else if (e.key === "ArrowDown" || (e.key === "Tab" && !e.shiftKey)) {
-    if (results.length > 1) {
-      e.preventDefault();
-      activeIdx = (activeIdx + 1) % results.length;
-      renderMatches();
-      renderBody();
-    }
+    if (results.length <= 1) return;
+    e.preventDefault();
+    move(1);
   } else if (e.key === "ArrowUp" || (e.key === "Tab" && e.shiftKey)) {
-    if (results.length > 1) {
-      e.preventDefault();
-      activeIdx = (activeIdx - 1 + results.length) % results.length;
-      renderMatches();
-      renderBody();
-    }
+    if (results.length <= 1) return;
+    e.preventDefault();
+    move(-1);
   }
 });
 

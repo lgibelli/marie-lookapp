@@ -148,6 +148,38 @@ if [ "${BUILD_INSTALLER:-0}" = "1" ]; then
       "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
   fi
 
+  # Verify the bootstrapper is a valid Authenticode binary signed by Microsoft
+  # before bundling it into our own (about-to-be-signed) installer. A poisoned
+  # download cache — or a one-time TLS/DNS MITM at download time — would
+  # otherwise be baked into every installer we ship, under our signature.
+  # Runs on every installer build (not just on download) so a tampered cache is
+  # always caught. Set WV2_SKIP_VERIFY=1 to bypass (not recommended).
+  if [ "${WV2_SKIP_VERIFY:-0}" != "1" ]; then
+    if ! command -v osslsigncode >/dev/null 2>&1; then
+      echo "error: osslsigncode not found — cannot verify the WebView2 bootstrapper." >&2
+      echo "       install it:  sudo port install osslsigncode   (or: brew install osslsigncode)" >&2
+      echo "       or bypass (not recommended):  WV2_SKIP_VERIFY=1 BUILD_INSTALLER=1 $0 ..." >&2
+      exit 1
+    fi
+    echo ">> verifying WebView2 bootstrapper Authenticode signature"
+    # Output-string match depends on osslsigncode's format; both lines below are
+    # present for a validly Microsoft-signed PE.
+    WV2_VERIFY="$(osslsigncode verify "${WV2_BOOTSTRAPPER}" 2>&1 || true)"
+    if ! grep -q "Signature verification: ok" <<<"${WV2_VERIFY}"; then
+      echo "error: WebView2 bootstrapper failed Authenticode verification." >&2
+      echo "       delete ${WV2_BOOTSTRAPPER} and re-run to re-download." >&2
+      echo "${WV2_VERIFY}" >&2
+      exit 1
+    fi
+    if ! grep -qi "Microsoft Corporation" <<<"${WV2_VERIFY}"; then
+      echo "error: WebView2 bootstrapper is not signed by Microsoft Corporation." >&2
+      echo "       delete ${WV2_BOOTSTRAPPER} and re-run to re-download." >&2
+      echo "${WV2_VERIFY}" >&2
+      exit 1
+    fi
+    echo "   bootstrapper signature OK (Microsoft Corporation)"
+  fi
+
   APP_VERSION="$(node -e "console.log(require('${PROJECT_ROOT}/package.json').version)")"
   OUT_FILE="${PROJECT_ROOT}/src-tauri/target/marie-lookup-setup-${APP_VERSION}.exe"
 

@@ -3,6 +3,7 @@ name = "marie-lookup"
 version = "2.0.0-pre2"
 description = "Tray-resident text snippet lookup with paste-at-cursor"
 edition = "2021"
+license = "GPL-3.0-or-later"
 
 [lib]
 name = "marie_lookup_lib"
@@ -16,7 +17,6 @@ tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-autostart = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 enigo = "0.2"
 arboard = "3"
