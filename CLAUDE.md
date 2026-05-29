@@ -97,8 +97,18 @@ No wrapper Rust commands needed.
   `legacy-abandoned-20260522` keeps the original .NET code.
 - Binaries: `lgibelli/marie-lookapp-releases` — GitHub Releases hold the
   built `.exe`s / `.dmg`s. The repo's own tree is just a README.
-- **Builds are local. No GitHub Actions** (cost reason). Don't add
-  `.github/workflows/*` for build/release pipelines without asking.
+- **Local builds are the default** (full control; the only path that signs and
+  the only way to get the macOS `.dmg`). **Windows-only CI also exists**:
+  `.github/workflows/release-windows.yml` builds the **unsigned** x64 + arm64
+  `.exe` on a `v*` tag push and publishes them to `marie-lookapp-releases`.
+  - Needs a `RELEASES_TOKEN` repo secret — a fine-grained PAT with
+    Contents: read & write on `lgibelli/marie-lookapp-releases` (the built-in
+    `GITHUB_TOKEN` can't write cross-repo).
+  - This repo is **private**, so Windows runners bill at 2x minutes (the
+    publish job runs on Linux, 1x). Don't add macOS/Linux *build* runners
+    (10x / cost) or expand CI without asking.
+  - CI output is **unsigned** (SmartScreen warns). Sign locally for trusted
+    releases; the installer is not built in CI.
 - Release flow:
   ```bash
   scripts/build-windows.sh release all
