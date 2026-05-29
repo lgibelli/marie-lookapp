@@ -1,17 +1,16 @@
 name: Build & release Windows binaries
 
 # Builds the unsigned Windows .exe for x64 + arm64 and publishes them as a
-# GitHub Release in the SEPARATE binaries repo (lgibelli/marie-lookapp-releases),
-# matching the manual release flow in CLAUDE.md.
+# GitHub Release on THIS repo (lgibelli/marie-lookapp).
 #
 # Trigger: push a version tag, e.g.  git tag v2.0.0-pre3 && git push origin v2.0.0-pre3
 #
-# Requires a repo secret RELEASES_TOKEN: a fine-grained PAT with
-# Contents: Read and write on lgibelli/marie-lookapp-releases (the built-in
-# GITHUB_TOKEN cannot write to a different repo). See CLAUDE.md.
+# No secrets needed: the built-in GITHUB_TOKEN (granted `contents: write` below)
+# can create releases in its own repo. Cross-repo publishing is what would have
+# required a PAT — we publish here instead.
 #
-# Cost note: this repo is private, so Windows runners bill at 2x minutes.
-# Only the two build jobs use Windows; the publish job runs on Linux (1x).
+# Cost note: this repo is private, so Windows runners bill at 2x minutes. Only
+# the two build jobs use Windows; the publish job runs on Linux (1x).
 
 on:
   push:
@@ -19,7 +18,7 @@ on:
       - "v*"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -81,26 +80,23 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Create release in marie-lookapp-releases
+      - name: Create release
         env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
           SRC_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::RELEASES_TOKEN secret is not set — see CLAUDE.md for how to create it." >&2
-            exit 1
-          fi
           # Mark semver pre-releases (any tag with a hyphen, e.g. v2.0.0-pre3).
           prerelease=()
           case "$TAG" in
             *-*) prerelease=(--prerelease) ;;
           esac
           gh release create "$TAG" \
-            --repo lgibelli/marie-lookapp-releases \
+            --repo "$REPO" \
             --title "Marie LookApp $TAG" \
-            --notes "Automated **unsigned** Windows build for \`$TAG\`. Built from lgibelli/marie-lookapp@\`$SRC_SHA\`. Windows SmartScreen will warn on first run." \
+            --notes "Automated **unsigned** Windows build for \`$TAG\` (commit \`$SRC_SHA\`). Windows SmartScreen will warn on first run; sign locally for trusted releases." \
             "${prerelease[@]}" \
             "artifacts/marie-lookup-windows-x64.exe#marie-lookup-windows-x64.exe" \
             "artifacts/marie-lookup-windows-arm64.exe#marie-lookup-windows-arm64.exe"

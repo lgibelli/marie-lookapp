@@ -95,15 +95,15 @@ No wrapper Rust commands needed.
 
 - Source: `lgibelli/marie-lookapp` — `main` is the Tauri rewrite,
   `legacy-abandoned-20260522` keeps the original .NET code.
-- Binaries: `lgibelli/marie-lookapp-releases` — GitHub Releases hold the
-  built `.exe`s / `.dmg`s. The repo's own tree is just a README.
+- Binaries: GitHub Releases on `lgibelli/marie-lookapp` itself hold the built
+  `.exe`s / `.dmg`s. (Releases previously lived in a separate
+  `marie-lookapp-releases` repo — retired in favour of same-repo releases.)
 - **Local builds are the default** (full control; the only path that signs and
   the only way to get the macOS `.dmg`). **Windows-only CI also exists**:
   `.github/workflows/release-windows.yml` builds the **unsigned** x64 + arm64
-  `.exe` on a `v*` tag push and publishes them to `marie-lookapp-releases`.
-  - Needs a `RELEASES_TOKEN` repo secret — a fine-grained PAT with
-    Contents: read & write on `lgibelli/marie-lookapp-releases` (the built-in
-    `GITHUB_TOKEN` can't write cross-repo).
+  `.exe` on a `v*` tag push and publishes them as a Release on this repo.
+  - No secret needed: the built-in `GITHUB_TOKEN` (granted `contents: write`)
+    creates the release in its own repo.
   - This repo is **private**, so Windows runners bill at 2x minutes (the
     publish job runs on Linux, 1x). Don't add macOS/Linux *build* runners
     (10x / cost) or expand CI without asking.
@@ -117,7 +117,7 @@ No wrapper Rust commands needed.
     src-tauri/target/aarch64-pc-windows-msvc/release/marie-lookup.exe
   BUILD_INSTALLER=1 scripts/build-windows.sh release x64   # wraps signed x64
   scripts/sign-windows.sh src-tauri/target/marie-lookup-setup-X.Y.Z.exe
-  gh release create vX.Y.Z --repo lgibelli/marie-lookapp-releases \
+  gh release create vX.Y.Z --repo lgibelli/marie-lookapp \
     --title "..." --notes-file NOTES.md --prerelease \
     src-tauri/target/x86_64-pc-windows-msvc/release/marie-lookup.exe#marie-lookup-windows-x64.exe \
     src-tauri/target/aarch64-pc-windows-msvc/release/marie-lookup.exe#marie-lookup-windows-arm64.exe \
