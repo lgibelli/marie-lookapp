@@ -144,11 +144,17 @@ $ok.addEventListener("click", async () => {
 });
 
 // ---- Auto-update (tauri-plugin-updater) -----------------------------------
-// Checks latest.json on the public releases repo at every launch. A found
-// update overrides the "don't show again" dismissal — the window pops up with
-// an Install/Later prompt. Install downloads the signed NSIS installer and
-// runs it silently; on Windows the app exits while the installer runs and the
-// installer relaunches it (see scripts/installer.nsi).
+// Checks latest.json on the public releases repo at launch and then hourly
+// (the app is tray-resident and can run for weeks). A found update pops the
+// window with an Install/Later prompt — overriding the "don't show again"
+// dismissal — but at most once per day PER VERSION: a brand-new release
+// prompts immediately, declining it buys 24h of silence. Install downloads
+// the signed NSIS installer and runs it silently; on Windows the app exits
+// while the installer runs and the installer relaunches it (installer.nsi).
+
+const UPDATE_PROMPT_KEY = "update-prompt-last-shown";
+const CHECK_INTERVAL_MS = 60 * 60 * 1000; // hourly
+const PROMPT_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day per version
 
 const $updateRow = document.getElementById("update-row");
 const $updateText = document.getElementById("update-text");
@@ -160,6 +166,15 @@ let pendingUpdate = null;
 async function checkForUpdate() {
   const updater = window.__TAURI__.updater;
   if (!updater) return false;
+  // Drop the previous check's plugin-side resource before re-checking.
+  if (pendingUpdate) {
+    try {
+      await pendingUpdate.close();
+    } catch (_err) {
+      /* already closed */
+    }
+    pendingUpdate = null;
+  }
   try {
     pendingUpdate = await updater.check();
   } catch (_err) {
@@ -173,6 +188,26 @@ async function checkForUpdate() {
     `(you have ${pendingUpdate.currentVersion}).`;
   $updateRow.classList.remove("hidden");
   return true;
+}
+
+function updatePromptAllowed(version) {
+  try {
+    const last = JSON.parse(localStorage.getItem(UPDATE_PROMPT_KEY) || "{}");
+    if (last.version !== version) return true; // new release → prompt now
+    return Date.now() - last.ts > PROMPT_INTERVAL_MS;
+  } catch (_err) {
+    return true;
+  }
+}
+
+async function maybePromptUpdate() {
+  if (!(await checkForUpdate())) return;
+  if (!updatePromptAllowed(pendingUpdate.version)) return;
+  localStorage.setItem(
+    UPDATE_PROMPT_KEY,
+    JSON.stringify({ version: pendingUpdate.version, ts: Date.now() })
+  );
+  await win.show();
 }
 
 $updateLater.addEventListener("click", () => {
@@ -235,10 +270,9 @@ async function init() {
     startRecording();
   }
   // Background update check last — network-bound, must not delay the notice.
-  // A found update forces the window up even when dismissed.
-  if (await checkForUpdate()) {
-    await win.show();
-  }
+  // Repeats hourly for as long as the app stays resident.
+  await maybePromptUpdate();
+  setInterval(maybePromptUpdate, CHECK_INTERVAL_MS);
 }
 
 init();
