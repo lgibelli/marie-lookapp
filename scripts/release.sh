@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # Local release pipeline for Marie LookApp — deliberately no CI.
 #
-# Builds the Windows binaries (cargo-xwin), signs them (Authenticode via
+# Builds the Windows binaries (cargo-xwin) and the macOS bundle (tauri
+# bundler: .dmg + .app.tar.gz updater artifact), signs them (Authenticode via
 # sign-windows.sh + Tauri-updater minisign), generates the updater manifest
-# (latest.json) and publishes everything as a GitHub Release on the PUBLIC
-# releases repo — the app's auto-updater fetches
+# (latest.json, windows-x86_64 + darwin-aarch64) and publishes everything as
+# a GitHub Release on the PUBLIC releases repo — the app's auto-updater
+# fetches
 #   https://github.com/<releases-repo>/releases/latest/download/latest.json
 # anonymously, so this must NOT be the (private) source repo.
+#
+# The macOS bundle is unsigned/un-notarized (no Apple Developer cert):
+# first-time installs need right-click → Open; self-updates are fine.
 #
 # Usage:
 #   scripts/release.sh ["release notes…"]
@@ -72,6 +77,23 @@ echo ">> generating updater signature"
 (cd "${ROOT}" && npx tauri signer sign -f "${UPDATER_KEY}" --password "" "${SETUP_EXE}")
 SIG="$(cat "${SETUP_EXE}.sig")"
 
+# macOS: bundle the .app plus — thanks to createUpdaterArtifacts — the
+# .app.tar.gz the updater consumes, minisigned during the build (the bundler
+# reads TAURI_SIGNING_PRIVATE_KEY, which takes a path or the key itself; the
+# _PATH variant is only understood by `tauri signer sign`). The .dmg is then
+# rolled by hand with hdiutil: tauri's dmg bundler drives Finder via
+# AppleScript and fails in non-interactive shells.
+echo ">> building macOS bundle (app + updater artifact + dmg)"
+(cd "${ROOT}" && TAURI_SIGNING_PRIVATE_KEY="${UPDATER_KEY}" \
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" npx tauri build --bundles app)
+BUNDLE_DIR="${ROOT}/src-tauri/target/release/bundle"
+MAC_TARGZ="$(ls -t "${BUNDLE_DIR}"/macos/"Marie Lookup.app.tar.gz" | head -1)"
+MAC_SIG="$(cat "${MAC_TARGZ}.sig")"
+MAC_DMG="${BUNDLE_DIR}/macos/marie-lookup-${VERSION}-macos-arm64.dmg"
+hdiutil create -quiet -volname "Marie Lookup" \
+  -srcfolder "${BUNDLE_DIR}/macos/Marie Lookup.app" \
+  -ov -format UDZO "${MAC_DMG}"
+
 echo ">> generating latest.json"
 LATEST="${ROOT}/src-tauri/target/latest.json"
 NOTES_JSON="$(node -p 'JSON.stringify(process.argv[1])' "${NOTES}")"
@@ -84,6 +106,10 @@ cat > "${LATEST}" <<EOF
     "windows-x86_64": {
       "signature": "${SIG}",
       "url": "https://github.com/${RELEASES_REPO}/releases/download/${TAG}/marie-lookup-setup-${VERSION}.exe"
+    },
+    "darwin-aarch64": {
+      "signature": "${MAC_SIG}",
+      "url": "https://github.com/${RELEASES_REPO}/releases/download/${TAG}/marie-lookup-macos-arm64.app.tar.gz"
     }
   }
 }
@@ -97,6 +123,8 @@ trap 'rm -rf "${STAGE}"' EXIT
 cp "${SETUP_EXE}" "${STAGE}/marie-lookup-setup-${VERSION}.exe"
 cp "${X64_EXE}" "${STAGE}/marie-lookup-windows-x64.exe"
 cp "${ARM64_EXE}" "${STAGE}/marie-lookup-windows-arm64.exe"
+cp "${MAC_DMG}" "${STAGE}/marie-lookup-${VERSION}-macos-arm64.dmg"
+cp "${MAC_TARGZ}" "${STAGE}/marie-lookup-macos-arm64.app.tar.gz"
 cp "${LATEST}" "${STAGE}/latest.json"
 
 echo ">> publishing ${TAG} to ${RELEASES_REPO}"
@@ -105,6 +133,8 @@ gh release create "${TAG}" --repo "${RELEASES_REPO}" \
   "${STAGE}/marie-lookup-setup-${VERSION}.exe" \
   "${STAGE}/marie-lookup-windows-x64.exe" \
   "${STAGE}/marie-lookup-windows-arm64.exe" \
+  "${STAGE}/marie-lookup-${VERSION}-macos-arm64.dmg" \
+  "${STAGE}/marie-lookup-macos-arm64.app.tar.gz" \
   "${STAGE}/latest.json"
 
 echo ">> done: https://github.com/${RELEASES_REPO}/releases/tag/${TAG}"
