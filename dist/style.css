@@ -99,6 +99,11 @@ body.lookup {
   color: var(--fg-dim);
   user-select: none;
 }
+/* Matched search term inside the result body (≥3-char queries). */
+.lookup-body .match {
+  font-weight: 700;
+  color: var(--accent);
+}
 
 
 .lookup-hint {
@@ -266,6 +271,10 @@ body.manage {
   display: flex;
   flex-direction: column;
   background: var(--bg-elev);
+  /* Grid item defaults to min-height:auto and would grow past the viewport;
+     pin it so the inner list scrolls instead of the whole column. */
+  min-height: 0;
+  overflow: hidden;
 }
 .sidebar-head {
   padding: 10px;
@@ -331,6 +340,7 @@ body.manage {
 
 .sidebar-list {
   flex: 1;
+  min-height: 0; /* allow the flex child to shrink so overflow-y can scroll */
   overflow-y: auto;
 }
 .sidebar-list .item,

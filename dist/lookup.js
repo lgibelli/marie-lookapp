@@ -37,6 +37,29 @@ function renderMatches() {
   });
 }
 
+// Render `text` into $body, bolding every case-insensitive occurrence of
+// `q` (treated as a literal substring). Built from text nodes + <b> so the
+// innerHTML-blocking project hook is never tripped.
+function renderHighlighted(text, q) {
+  $body.replaceChildren();
+  const lowText = text.toLowerCase();
+  const lowQ = q.toLowerCase();
+  let i = 0;
+  while (i <= text.length) {
+    const idx = lowText.indexOf(lowQ, i);
+    if (idx === -1) {
+      if (i < text.length) $body.appendChild(document.createTextNode(text.slice(i)));
+      break;
+    }
+    if (idx > i) $body.appendChild(document.createTextNode(text.slice(i, idx)));
+    const b = document.createElement("b");
+    b.className = "match";
+    b.textContent = text.slice(idx, idx + q.length);
+    $body.appendChild(b);
+    i = idx + q.length;
+  }
+}
+
 function renderBody() {
   if (!results.length) {
     $body.classList.add("empty");
@@ -46,7 +69,16 @@ function renderBody() {
     return;
   }
   $body.classList.remove("empty");
-  $body.textContent = results[activeIdx].body;
+  const text = results[activeIdx].body;
+  const q = $search.value.trim();
+  // Bold the matched term inside the body, but only once the query is long
+  // enough to be meaningful (≥3 chars) — short queries would highlight noise.
+  // Topics mode has an empty query, so it stays plain.
+  if (q.length >= 3) {
+    renderHighlighted(text, q);
+  } else {
+    $body.textContent = text;
+  }
 }
 
 function render() {

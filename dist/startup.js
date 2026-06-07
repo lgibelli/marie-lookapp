@@ -269,6 +269,16 @@ $updateInstall.addEventListener("click", async () => {
   let total = 0;
   let got = 0;
   try {
+    // Flush the WAL into the main .db before the installer force-kills us
+    // (Windows: the running exe is locked and our WM_CLOSE-to-hide makes a
+    // polite close a no-op, so the installer taskkill /F's us, skipping the
+    // on-exit checkpoint). Belt-and-suspenders with the new version's
+    // on-open checkpoint. Best-effort — don't block the update if it fails.
+    try {
+      await invoke("checkpoint_now");
+    } catch (_err) {
+      /* non-fatal */
+    }
     await pendingUpdate.downloadAndInstall((ev) => {
       if (ev.event === "Started") {
         total = ev.data.contentLength || 0;

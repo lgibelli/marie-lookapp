@@ -176,6 +176,15 @@ fn open_db(path: &std::path::Path) -> rusqlite::Result<Connection> {
     // connection is ever opened.
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
+    // Auto-checkpoint defaults to 1000 WAL pages (~4 MB) — a snippet DB never
+    // gets that big, so the main .db would stay perpetually stale and a naive
+    // file copy (or hand-off of the DB) would lose everything still in the WAL.
+    // Lower the threshold and also checkpoint explicitly (periodically, after
+    // edits, and on exit — see checkpoint_wal) so the .db stays close to current.
+    conn.pragma_update(None, "wal_autocheckpoint", 64)?;
+    // Fold any WAL left over from a previous (possibly force-killed) run into
+    // the main file right away.
+    let _ = conn.pragma_update(None, "wal_checkpoint", "TRUNCATE");
 
     // Schema migrations keyed on PRAGMA user_version. Pre-versioning DBs report
     // version 0 and are stamped to 1 here (their schema already matches v1).
@@ -353,6 +362,18 @@ fn do_backup(app: &tauri::AppHandle) -> Result<std::path::PathBuf, AppError> {
     Ok(path)
 }
 
+/// Fold the WAL into the main .db (TRUNCATE so the -wal file shrinks back).
+/// Keeps the on-disk marie-lookup.db close to current state — otherwise the
+/// data lives only in the WAL and a raw file copy / hand-off loses it. Cheap
+/// for this DB's size; best-effort.
+fn checkpoint_wal(app: &tauri::AppHandle) {
+    if let Some(db) = app.try_state::<Db>() {
+        if let Ok(conn) = db.0.lock() {
+            let _ = conn.pragma_update(None, "wal_checkpoint", "TRUNCATE");
+        }
+    }
+}
+
 /// Debounced auto-backup: runs 60s after the latest mutation unless a newer
 /// mutation superseded it. See AppState::backup_gen. Also stamps
 /// `dirty_since` (cleared by a successful backup) so `backup_maintenance`
@@ -378,6 +399,8 @@ fn schedule_backup(app: &tauri::AppHandle) {
         if app.state::<AppState>().backup_gen.load(Ordering::SeqCst) != gen {
             return;
         }
+        // Consolidate the just-made edits into the main .db, then snapshot.
+        checkpoint_wal(&app);
         if let Err(e) = do_backup(&app) {
             // Quietly skip when no folder is chosen — the 72h reminder in
             // backup_maintenance owns that situation.
@@ -1038,6 +1061,16 @@ fn open_releases_page() -> Result<(), AppError> {
     Ok(())
 }
 
+/// Force a WAL checkpoint now. Called from the frontend right before an update
+/// install: the Windows updater's installer `taskkill /F`s us (the exe is
+/// locked while running and our WM_CLOSE-to-hide makes a polite close a no-op),
+/// which skips the on-exit checkpoint — so flush first, deterministically.
+#[tauri::command]
+fn checkpoint_now(app: tauri::AppHandle) -> Result<(), AppError> {
+    checkpoint_wal(&app);
+    Ok(())
+}
+
 /// Tray "About Marie Lookup…": a tiny native dialog — name + version + a
 /// button to the releases page. Deliberately NOT the startup window (that's
 /// the richer status panel "Check for updates…" uses); About is at-a-glance.
@@ -1142,6 +1175,19 @@ pub fn run() {
                     loop {
                         backup_maintenance(&app_handle);
                         tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                    }
+                });
+            }
+
+            // Periodic WAL checkpoint so the main .db never drifts far behind
+            // the WAL (see checkpoint_wal). Independent of edits/backups — even
+            // an idle-then-killed session leaves a near-current .db.
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                        checkpoint_wal(&app_handle);
                     }
                 });
             }
@@ -1275,6 +1321,7 @@ pub fn run() {
             restore_entry,
             recent_topics,
             open_releases_page,
+            checkpoint_now,
         ])
         .on_window_event(|window, event| {
             // Keep the app running when the manage window is closed:
@@ -1284,6 +1331,15 @@ pub fn run() {
                 api.prevent_close();
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Final WAL checkpoint on a clean exit (tray Quit → app.exit, etc.)
+            // so the main .db is complete on disk. A force-kill (e.g. the
+            // Windows updater's taskkill) skips this, but the WAL is crash-safe
+            // and the next launch checkpoints it in open_db.
+            if let tauri::RunEvent::Exit = event {
+                checkpoint_wal(app);
+            }
+        });
 }
