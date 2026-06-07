@@ -237,6 +237,20 @@ fn open_db(path: &std::path::Path) -> rusqlite::Result<Connection> {
         conn.execute_batch("ALTER TABLE entries ADD COLUMN deleted_at INTEGER;")?;
         conn.pragma_update(None, "user_version", 4)?;
     }
+    if version < 5 {
+        // Paste log powering the lookup window's empty-search "recents" view
+        // (last pasted snippets + the entries they came from). Only successful
+        // pastes are recorded; capped at 100 rows in paste_text.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS paste_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entry_id INTEGER,
+                text TEXT NOT NULL,
+                pasted_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+            );",
+        )?;
+        conn.pragma_update(None, "user_version", 5)?;
+    }
 
     // Empty the trash for real after 90 days, history included. Runs on
     // every launch (open_db is called once at setup).
@@ -638,6 +652,17 @@ fn restore_backup(
                 [],
                 |r| r.get(0),
             )?;
+            let bak_has_pastes: i64 = conn.query_row(
+                "SELECT count(*) FROM bak.sqlite_master WHERE type='table' AND name='paste_history'",
+                [],
+                |r| r.get(0),
+            )?;
+            let copy_pastes = if bak_has_pastes > 0 {
+                "INSERT INTO main.paste_history (id, entry_id, text, pasted_at)
+                   SELECT id, entry_id, text, pasted_at FROM bak.paste_history;"
+            } else {
+                ""
+            };
             let copy_entries = if bak_has_deleted > 0 {
                 "INSERT INTO main.entries (id, title, body, created_at, updated_at, deleted_at)
                    SELECT id, title, body, created_at, updated_at, deleted_at FROM bak.entries;"
@@ -651,6 +676,8 @@ fn restore_backup(
                  {copy_entries}
                  DELETE FROM main.entry_versions;
                  {copy_versions}
+                 DELETE FROM main.paste_history;
+                 {copy_pastes}
                  COMMIT;"
             ))?;
             Ok(conn.query_row("SELECT count(*) FROM main.entries", [], |r| r.get(0))?)
@@ -703,7 +730,12 @@ fn open_accessibility_settings() -> Result<(), AppError> {
 }
 
 #[tauri::command]
-async fn paste_text(app: tauri::AppHandle, text: String) -> Result<(), AppError> {
+async fn paste_text(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, Db>,
+    text: String,
+    entry_id: Option<i64>,
+) -> Result<(), AppError> {
     // Check Accessibility permission BEFORE hiding our window, so the user
     // can read the inline hint we'll show if it's missing.
     #[cfg(target_os = "macos")]
@@ -715,7 +747,7 @@ async fn paste_text(app: tauri::AppHandle, text: String) -> Result<(), AppError>
     }
 
     let mut cb = arboard::Clipboard::new()?;
-    cb.set_text(text)?;
+    cb.set_text(text.clone())?;
     drop(cb);
 
     // Mark the paste in-flight so the global hotkey / focus-loss handler won't
@@ -785,7 +817,66 @@ async fn paste_text(app: tauri::AppHandle, text: String) -> Result<(), AppError>
     app.state::<AppState>()
         .is_pasting
         .store(false, Ordering::SeqCst);
+
+    // Log successful pastes for the lookup window's "recents" view. Best
+    // effort — a failed log must not fail the paste.
+    if outcome.is_ok() {
+        if let Ok(conn) = db.0.lock() {
+            let _ = conn.execute(
+                "INSERT INTO paste_history (entry_id, text) VALUES (?1, ?2)",
+                params![entry_id, text],
+            );
+            let _ = conn.execute(
+                "DELETE FROM paste_history WHERE id NOT IN
+                   (SELECT id FROM paste_history ORDER BY id DESC LIMIT 100)",
+                [],
+            );
+        }
+    }
     outcome
+}
+
+#[derive(Serialize)]
+struct RecentPaste {
+    text: String,
+    entry_id: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct RecentLookups {
+    /// Last 10 distinct pasted snippets, most recent first.
+    pastes: Vec<RecentPaste>,
+    /// Last 3 distinct (live) entries something was pasted from.
+    topics: Vec<Entry>,
+}
+
+/// Empty-search state of the lookup window: recently pasted snippets and the
+/// entries they came from. Trashed entries never appear as topics.
+#[tauri::command]
+fn recent_lookups(db: tauri::State<Db>) -> Result<RecentLookups, AppError> {
+    let conn = db.0.lock()?;
+    let mut stmt = conn.prepare(
+        "SELECT text, entry_id, MAX(pasted_at) AS t FROM paste_history
+         GROUP BY text ORDER BY t DESC LIMIT 10",
+    )?;
+    let pastes = stmt
+        .query_map([], |r| {
+            Ok(RecentPaste {
+                text: r.get(0)?,
+                entry_id: r.get(1)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut stmt = conn.prepare(
+        "SELECT e.id, e.title, e.body, e.updated_at, MAX(p.pasted_at) AS t
+         FROM paste_history p JOIN entries e ON e.id = p.entry_id
+         WHERE e.deleted_at IS NULL
+         GROUP BY e.id ORDER BY t DESC LIMIT 3",
+    )?;
+    let topics = stmt
+        .query_map([], row_to_entry)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(RecentLookups { pastes, topics })
 }
 
 /// Hide the lookup window (and, on macOS, the whole app so focus returns to the
@@ -1135,6 +1226,7 @@ pub fn run() {
             list_versions,
             list_trash,
             restore_entry,
+            recent_lookups,
             open_releases_page,
         ])
         .on_window_event(|window, event| {

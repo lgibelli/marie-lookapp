@@ -9,6 +9,11 @@ let results = [];
 let activeIdx = 0;
 let searchTimer = null;
 
+// Empty-search state: recently pasted snippets + the entries they came from
+// ("topics"). Fetched on every window focus; replaced by normal results the
+// moment the user types.
+let recents = { pastes: [], topics: [] };
+
 function renderMatches() {
   $matches.replaceChildren();
   if (results.length <= 1) return;
@@ -37,9 +42,64 @@ function renderBody() {
   $body.textContent = results[activeIdx].body;
 }
 
+// Topic pills in the matches row, recently-pasted snippets as clickable rows
+// in the body area. Clicking a topic shows it like a single search result;
+// clicking a snippet pastes it straight away.
+function renderRecents() {
+  $matches.replaceChildren();
+  for (const t of recents.topics) {
+    const el = document.createElement("div");
+    el.className = "pill";
+    el.textContent = t.title;
+    el.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      results = [t];
+      activeIdx = 0;
+      render();
+    });
+    $matches.appendChild(el);
+  }
+  $body.replaceChildren();
+  if (!recents.pastes.length) {
+    $body.classList.add("empty");
+    $body.textContent = "Type to search.";
+    return;
+  }
+  $body.classList.remove("empty");
+  const hint = document.createElement("div");
+  hint.className = "recent-hint";
+  hint.textContent = "Recently pasted — click to paste again:";
+  $body.appendChild(hint);
+  for (const p of recents.pastes) {
+    const row = document.createElement("div");
+    row.className = "recent-row";
+    row.textContent = p.text;
+    row.title = p.text;
+    row.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      pasteText(p.text, p.entry_id);
+    });
+    $body.appendChild(row);
+  }
+}
+
 function render() {
+  if (!$search.value.trim() && !results.length) {
+    renderRecents();
+    return;
+  }
   renderMatches();
   renderBody();
+}
+
+async function refreshRecents() {
+  try {
+    recents = await invoke("recent_lookups");
+  } catch (e) {
+    console.error("recent_lookups failed", e);
+    recents = { pastes: [], topics: [] };
+  }
+  if (!$search.value.trim() && !results.length) render();
 }
 
 // Move the selection by `delta` (wrapping). No-op with 0 or 1 results.
@@ -72,13 +132,10 @@ $search.addEventListener("input", () => {
   searchTimer = setTimeout(doSearch, 120);
 });
 
-async function paste() {
-  if (!results.length) return;
-  const sel = window.getSelection().toString();
-  const text = sel || results[activeIdx].body;
+async function pasteText(text, entryId) {
   if (!text) return;
   try {
-    await invoke("paste_text", { text });
+    await invoke("paste_text", { text, entryId: entryId ?? null });
   } catch (e) {
     // CONTRACT: this string matches ERR_ACCESSIBILITY returned by paste_text in
     // src-tauri/src/lib.rs. Keep both sides in sync — there's no shared module
@@ -90,6 +147,13 @@ async function paste() {
     console.error("paste failed", e);
   }
   resetUI();
+}
+
+async function paste() {
+  if (!results.length) return;
+  const sel = window.getSelection().toString();
+  const text = sel || results[activeIdx].body;
+  await pasteText(text, results[activeIdx].id);
 }
 
 function showAccessibilityHint() {
@@ -147,7 +211,9 @@ document.addEventListener("keydown", (e) => {
 
 getCurrentWindow().listen("tauri://focus", () => {
   resetUI();
+  refreshRecents();
   setTimeout(() => $search.focus(), 0);
 });
 
+refreshRecents();
 setTimeout(() => $search.focus(), 0);
