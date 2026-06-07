@@ -209,6 +209,12 @@ $updateInstall.addEventListener("click", async () => {
 
 async function init() {
   try {
+    document.getElementById("app-version").textContent =
+      await window.__TAURI__.app.getVersion();
+  } catch (_err) {
+    // cosmetic only
+  }
+  try {
     active = await invoke("get_hotkey");
   } catch (_err) {
     active = null;

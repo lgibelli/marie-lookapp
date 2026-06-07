@@ -1,6 +1,6 @@
 {
   "name": "marie-lookup",
-  "version": "2.0.0-pre4",
+  "version": "2.0.0-pre5",
   "private": true,
   "type": "module",
   "scripts": {
