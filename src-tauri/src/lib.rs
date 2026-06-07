@@ -862,21 +862,9 @@ fn show_manage(app: &tauri::AppHandle) {
     }
 }
 
-/// Show + focus the startup/about window (tray "About Marie Lookup…"). The
-/// window doubles as the about box: it already shows name, version, hotkey
-/// and hosts the update UI + releases link.
-fn show_startup(app: &tauri::AppHandle) {
-    if let Some(w) = app.get_webview_window("startup") {
-        let _ = w.show();
-        let _ = w.unminimize();
-        let _ = w.set_focus();
-    }
-}
-
-/// Open the public releases page in the default browser. A dedicated command
-/// (rather than tauri-plugin-opener) because it's one fixed URL.
-#[tauri::command]
-fn open_releases_page() -> Result<(), AppError> {
+/// Open the public releases page in the default browser. Hand-rolled rather
+/// than pulling in tauri-plugin-opener for one fixed URL.
+fn open_releases_url() -> std::io::Result<()> {
     let url = "https://github.com/lgibelli/marie-lookapp-releases/releases";
     #[cfg(target_os = "macos")]
     std::process::Command::new("open").arg(url).spawn()?;
@@ -892,6 +880,32 @@ fn open_releases_page() -> Result<(), AppError> {
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     std::process::Command::new("xdg-open").arg(url).spawn()?;
     Ok(())
+}
+
+#[tauri::command]
+fn open_releases_page() -> Result<(), AppError> {
+    open_releases_url()?;
+    Ok(())
+}
+
+/// Tray "About Marie Lookup…": a tiny native dialog — name + version + a
+/// button to the releases page. Deliberately NOT the startup window (that's
+/// the richer status panel "Check for updates…" uses); About is at-a-glance.
+fn show_about(app: &tauri::AppHandle) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+    let version = app.package_info().version.to_string();
+    app.dialog()
+        .message(format!("Marie Lookup v{version}"))
+        .title("About Marie Lookup")
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Open releases page".into(),
+            "Close".into(),
+        ))
+        .show(|open_releases| {
+            if open_releases {
+                let _ = open_releases_url();
+            }
+        });
 }
 
 fn show_lookup(app: &tauri::AppHandle) {
@@ -1066,7 +1080,7 @@ pub fn run() {
                     "check-updates" => {
                         let _ = app.emit_to("startup", "check-updates", ());
                     }
-                    "about" => show_startup(app),
+                    "about" => show_about(app),
                     "quit" => app.exit(0),
                     _ => {}
                 })

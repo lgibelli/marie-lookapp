@@ -139,7 +139,13 @@ async function save() {
       await invoke("update_entry", { id: selectedId, title, body });
     }
     await refresh();
-    if (selectedId != null) selectEntry(selectedId);
+    // Reset the dirty baseline in place — selectEntry() deliberately
+    // no-ops for the already-selected entry, so it can't do this for us.
+    $title.value = title; // reflect the trimmed title that was saved
+    loadedTitle = title;
+    loadedBody = body;
+    document.body.classList.add("editing", "has-selection");
+    updateSaveState();
   } catch (e) {
     console.error("save failed", e);
     alert("Save failed: " + e);
