@@ -32,6 +32,14 @@ const DEFAULT_HOTKEY: &str = "Control+Alt+M";
 
 pub struct Db(pub Mutex<Connection>);
 
+/// Handle to the tray's "Lookup…" item so `set_hotkey` can keep its
+/// accelerator hint in sync with the live combo — it's set at build time
+/// from whatever registered at startup and would otherwise go stale the
+/// moment the user records a different hotkey.
+struct TrayMenu {
+    show_item: tauri::menu::MenuItem<tauri::Wry>,
+}
+
 /// Process-wide flags shared across commands, the tray, and window events.
 struct AppState {
     /// True while `paste_text` is mid-flight (window hidden, focus handed back
@@ -669,6 +677,11 @@ fn set_hotkey(
         let _ = app.global_shortcut().unregister(old.as_str());
     }
     *current = Some(hotkey.clone());
+    // Refresh the tray hint. Best-effort: muda may reject a combo that
+    // global_hotkey accepted, and the hint is cosmetic.
+    if let Some(tray) = app.try_state::<TrayMenu>() {
+        let _ = tray.show_item.set_accelerator(Some(hotkey.as_str()));
+    }
     let conn = db.0.lock()?;
     set_setting(&conn, "hotkey", &hotkey)?;
     Ok(())
@@ -822,6 +835,9 @@ pub fn run() {
                     .build(app)
                     .or_else(|_| MenuItemBuilder::with_id("show", "Lookup…").build(app))?
             };
+            app.manage(TrayMenu {
+                show_item: show_item.clone(),
+            });
             let manage_item = MenuItemBuilder::with_id("manage", "Manage entries…").build(app)?;
             let check_item =
                 MenuItemBuilder::with_id("check-updates", "Check for updates…").build(app)?;
