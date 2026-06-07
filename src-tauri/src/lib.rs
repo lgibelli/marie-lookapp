@@ -836,37 +836,13 @@ async fn paste_text(
     outcome
 }
 
-#[derive(Serialize)]
-struct RecentPaste {
-    text: String,
-    entry_id: Option<i64>,
-}
-
-#[derive(Serialize)]
-struct RecentLookups {
-    /// Last 10 distinct pasted snippets, most recent first.
-    pastes: Vec<RecentPaste>,
-    /// Last 3 distinct (live) entries something was pasted from.
-    topics: Vec<Entry>,
-}
-
-/// Empty-search state of the lookup window: recently pasted snippets and the
-/// entries they came from. Trashed entries never appear as topics.
+/// Empty-search state of the lookup window: the last 3 distinct (live)
+/// entries something was pasted from, most recently used first — the lookup
+/// opens the first one by default so more text can be selected from it
+/// without typing. Trashed entries never appear.
 #[tauri::command]
-fn recent_lookups(db: tauri::State<Db>) -> Result<RecentLookups, AppError> {
+fn recent_topics(db: tauri::State<Db>) -> Result<Vec<Entry>, AppError> {
     let conn = db.0.lock()?;
-    let mut stmt = conn.prepare(
-        "SELECT text, entry_id, MAX(pasted_at) AS t FROM paste_history
-         GROUP BY text ORDER BY t DESC LIMIT 10",
-    )?;
-    let pastes = stmt
-        .query_map([], |r| {
-            Ok(RecentPaste {
-                text: r.get(0)?,
-                entry_id: r.get(1)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut stmt = conn.prepare(
         "SELECT e.id, e.title, e.body, e.updated_at, MAX(p.pasted_at) AS t
          FROM paste_history p JOIN entries e ON e.id = p.entry_id
@@ -876,7 +852,7 @@ fn recent_lookups(db: tauri::State<Db>) -> Result<RecentLookups, AppError> {
     let topics = stmt
         .query_map([], row_to_entry)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(RecentLookups { pastes, topics })
+    Ok(topics)
 }
 
 /// Hide the lookup window (and, on macOS, the whole app so focus returns to the
@@ -1226,7 +1202,7 @@ pub fn run() {
             list_versions,
             list_trash,
             restore_entry,
-            recent_lookups,
+            recent_topics,
             open_releases_page,
         ])
         .on_window_event(|window, event| {

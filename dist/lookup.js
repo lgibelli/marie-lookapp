@@ -9,10 +9,11 @@ let results = [];
 let activeIdx = 0;
 let searchTimer = null;
 
-// Empty-search state: recently pasted snippets + the entries they came from
-// ("topics"). Fetched on every window focus; replaced by normal results the
-// moment the user types.
-let recents = { pastes: [], topics: [] };
+// Empty-search state: the last 3 entries something was pasted from, most
+// recent first. They're loaded as ordinary results — pills + body — with the
+// most recent one open, so more text can be selected from it immediately.
+// Fetched on every window focus; typing replaces them with real search hits.
+let topics = [];
 
 function renderMatches() {
   $matches.replaceChildren();
@@ -42,64 +43,26 @@ function renderBody() {
   $body.textContent = results[activeIdx].body;
 }
 
-// Topic pills in the matches row, recently-pasted snippets as clickable rows
-// in the body area. Clicking a topic shows it like a single search result;
-// clicking a snippet pastes it straight away.
-function renderRecents() {
-  $matches.replaceChildren();
-  for (const t of recents.topics) {
-    const el = document.createElement("div");
-    el.className = "pill";
-    el.textContent = t.title;
-    el.addEventListener("mousedown", (e) => {
-      e.preventDefault();
-      results = [t];
-      activeIdx = 0;
-      render();
-    });
-    $matches.appendChild(el);
-  }
-  $body.replaceChildren();
-  if (!recents.pastes.length) {
-    $body.classList.add("empty");
-    $body.textContent = "Type to search.";
-    return;
-  }
-  $body.classList.remove("empty");
-  const hint = document.createElement("div");
-  hint.className = "recent-hint";
-  hint.textContent = "Recently pasted — click to paste again:";
-  $body.appendChild(hint);
-  for (const p of recents.pastes) {
-    const row = document.createElement("div");
-    row.className = "recent-row";
-    row.textContent = p.text;
-    row.title = p.text;
-    row.addEventListener("mousedown", (e) => {
-      e.preventDefault();
-      pasteText(p.text, p.entry_id);
-    });
-    $body.appendChild(row);
-  }
-}
-
 function render() {
-  if (!$search.value.trim() && !results.length) {
-    renderRecents();
-    return;
-  }
   renderMatches();
   renderBody();
 }
 
-async function refreshRecents() {
+// Load the recent topics as the current result set (most recent one open).
+function showTopics() {
+  results = topics.slice();
+  activeIdx = 0;
+  render();
+}
+
+async function refreshTopics() {
   try {
-    recents = await invoke("recent_lookups");
+    topics = await invoke("recent_topics");
   } catch (e) {
-    console.error("recent_lookups failed", e);
-    recents = { pastes: [], topics: [] };
+    console.error("recent_topics failed", e);
+    topics = [];
   }
-  if (!$search.value.trim() && !results.length) render();
+  if (!$search.value.trim()) showTopics();
 }
 
 // Move the selection by `delta` (wrapping). No-op with 0 or 1 results.
@@ -112,9 +75,8 @@ function move(delta) {
 async function doSearch() {
   const q = $search.value.trim();
   if (!q) {
-    results = [];
-    activeIdx = 0;
-    render();
+    // Box cleared — fall back to the recent topics.
+    showTopics();
     return;
   }
   try {
@@ -186,9 +148,7 @@ async function cancel() {
 
 function resetUI() {
   $search.value = "";
-  results = [];
-  activeIdx = 0;
-  render();
+  showTopics();
 }
 
 document.addEventListener("keydown", (e) => {
@@ -211,9 +171,9 @@ document.addEventListener("keydown", (e) => {
 
 getCurrentWindow().listen("tauri://focus", () => {
   resetUI();
-  refreshRecents();
+  refreshTopics();
   setTimeout(() => $search.focus(), 0);
 });
 
-refreshRecents();
+refreshTopics();
 setTimeout(() => $search.focus(), 0);

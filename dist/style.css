@@ -100,26 +100,6 @@ body.lookup {
   user-select: none;
 }
 
-/* Empty-search recents: recently pasted snippets as clickable rows. */
-.recent-hint {
-  font-size: 11px;
-  color: var(--fg-dim);
-  margin-bottom: 8px;
-  user-select: none;
-}
-.recent-row {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  padding: 6px 8px;
-  border-radius: 6px;
-  cursor: pointer;
-  user-select: none;
-  font-size: 13px;
-}
-.recent-row:hover {
-  background: var(--bg-elev);
-}
 
 .lookup-hint {
   padding: 8px 14px;
