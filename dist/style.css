@@ -292,6 +292,43 @@ body.manage {
   font-size: 13px;
   outline: none;
 }
+.sidebar-sort {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.sort-label {
+  font-size: 11px;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.segmented {
+  display: inline-flex;
+  margin-left: auto;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 2px;
+}
+.segmented .seg {
+  border: none;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.segmented .seg.active {
+  background: var(--accent);
+  color: #fff;
+}
+.segmented .seg:not(.active):hover { color: var(--fg); }
+
 .sidebar-list {
   flex: 1;
   overflow-y: auto;

@@ -11,6 +11,13 @@
         <button id="new-btn">+ New</button>
         <input id="filter" type="text" placeholder="Filter…" />
       </div>
+      <div class="sidebar-sort">
+        <span class="sort-label">Sort</span>
+        <div class="segmented" role="group" aria-label="Sort entries">
+          <button id="sort-az" class="seg active" type="button">A–Z</button>
+          <button id="sort-recent" class="seg" type="button">Recent</button>
+        </div>
+      </div>
       <div id="list" class="sidebar-list"></div>
       <div id="trash-section" class="trash-section hidden">
         <button id="trash-toggle">Deleted ▸</button>
@@ -40,7 +47,7 @@
         <button id="history-btn" title="View previous versions of this entry">↺</button>
         <button id="delete-btn" class="danger" title="Move to Deleted (restorable for 90 days)">🗑</button>
         <button id="restore-btn" class="primary" title="Restore this entry from Deleted">Restore</button>
-        <button id="save-btn" class="primary">Save</button>
+        <button id="save-btn" class="primary" disabled>Save</button>
       </div>
       <div id="history-bar" class="history-bar hidden">
         <span id="history-info"></span>

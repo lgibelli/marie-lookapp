@@ -31,17 +31,33 @@ async function refresh() {
 // views always have it disabled), asks Save / Discard via a native dialog.
 // Choosing Save saves first and only proceeds if the save succeeded.
 async function confirmLeave() {
-  if ($saveBtn.disabled) return true;
+  // Nothing open ⇒ nothing to lose (also guards the pristine just-launched
+  // state, where the button's disabled state hasn't been synced yet).
+  if (!isEditing() || $saveBtn.disabled) return true;
   const wantSave = await dialogAsk("Save changes before leaving this entry?", {
     title: "Unsaved changes",
     okLabel: "Save",
     cancelLabel: "Discard",
   });
-  if (wantSave) {
-    await save();
-    return $saveBtn.disabled; // still enabled ⇒ save failed ⇒ stay put
+  if (wantSave) return await save(); // proceed only if the save succeeded
+  return true; // Discard
+}
+
+// Sidebar sort order. Default A–Z so the list is stable (saving an entry no
+// longer makes it jump around); "recent" = most-recently-modified first.
+// Persisted in localStorage (pure UI preference, device-local).
+let sortMode = localStorage.getItem("sort-mode") === "recent" ? "recent" : "az";
+
+function sortedEntries(list) {
+  const copy = list.slice();
+  if (sortMode === "recent") {
+    copy.sort((a, b) => b.updated_at - a.updated_at);
+  } else {
+    copy.sort((a, b) =>
+      (a.title || "").localeCompare(b.title || "", undefined, { sensitivity: "base" })
+    );
   }
-  return true;
+  return copy;
 }
 
 function renderList() {
@@ -53,6 +69,7 @@ function renderList() {
           e.body.toLowerCase().includes(q),
       )
     : entries;
+  const sorted = sortedEntries(filtered);
   $list.replaceChildren();
   if (!filtered.length) {
     const empty = document.createElement("div");
@@ -63,7 +80,7 @@ function renderList() {
     $list.appendChild(empty);
     return;
   }
-  for (const e of filtered) {
+  for (const e of sorted) {
     const div = document.createElement("div");
     div.className = "item" + (e.id === selectedId ? " active" : "");
     const title = document.createElement("span");
@@ -105,13 +122,15 @@ function updateSaveState() {
 }
 
 async function selectEntry(id) {
-  const e = entries.find((x) => x.id === id);
-  if (!e) return;
   // Clicking the entry that's already open must not reload (= wipe) edits.
   if (id === selectedId && !inHistory() && !viewingTrash()) return;
   if (!(await confirmLeave())) return;
   exitHistory();
   leaveTrashView();
+  // Re-find AFTER confirmLeave — a Save in there reloads `entries`, so an
+  // object captured before would be stale.
+  const e = entries.find((x) => x.id === id);
+  if (!e) return;
   selectedId = id;
   $title.value = e.title;
   $body.value = e.body;
@@ -138,15 +157,17 @@ async function newEntry() {
   setTimeout(() => $title.focus(), 0);
 }
 
+// Returns true when the entry is safely persisted (so callers like
+// confirmLeave can proceed), false on failure or nothing-to-save edge cases.
 async function save() {
-  if ($saveBtn.disabled || inHistory()) return;
+  if (inHistory()) return false;
+  if ($saveBtn.disabled) return true; // nothing changed — already safe
   const title = $title.value.trim();
   const body = $body.value;
-  if (!title && !body.trim()) return;
+  if (!title && !body.trim()) return false;
   try {
     if (selectedId == null) {
-      const id = await invoke("add_entry", { title, body });
-      selectedId = id;
+      selectedId = await invoke("add_entry", { title, body });
     } else {
       await invoke("update_entry", { id: selectedId, title, body });
     }
@@ -158,9 +179,11 @@ async function save() {
     loadedBody = body;
     document.body.classList.add("editing", "has-selection");
     updateSaveState();
+    return true;
   } catch (e) {
     console.error("save failed", e);
     await dialogMessage("Save failed: " + e, { title: "Marie Lookup", kind: "error" });
+    return false;
   }
 }
 
@@ -176,6 +199,7 @@ async function del() {
     await invoke("delete_entry", { id: selectedId });
     selectedId = null;
     document.body.classList.remove("editing", "has-selection");
+    updateSaveState();
     await refresh();
   } catch (e) {
     console.error("delete failed", e);
@@ -386,6 +410,20 @@ $filter.addEventListener("input", renderList);
 $title.addEventListener("input", updateSaveState);
 $body.addEventListener("input", updateSaveState);
 
+const $sortAz = document.getElementById("sort-az");
+const $sortRecent = document.getElementById("sort-recent");
+function setSort(mode) {
+  sortMode = mode;
+  localStorage.setItem("sort-mode", mode);
+  $sortAz.classList.toggle("active", mode === "az");
+  $sortRecent.classList.toggle("active", mode === "recent");
+  renderList();
+}
+$sortAz.addEventListener("click", () => setSort("az"));
+$sortRecent.addEventListener("click", () => setSort("recent"));
+// Reflect the persisted choice in the toggle on load.
+setSort(sortMode);
+
 document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === "s") {
     e.preventDefault();
@@ -537,6 +575,7 @@ $backupRestore.addEventListener("click", async () => {
     leaveTrashView();
     selectedId = null;
     document.body.classList.remove("editing", "has-selection", "trash-view");
+    updateSaveState();
     await refresh();
     await refreshBackups();
   } catch (e) {
@@ -544,6 +583,7 @@ $backupRestore.addEventListener("click", async () => {
   }
 });
 
+updateSaveState();
 refresh();
 refreshAutostart();
 refreshBackups();

@@ -11,13 +11,19 @@ let searchTimer = null;
 
 // Empty-search state: the last 3 entries something was pasted from, most
 // recent first. They're loaded as ordinary results — pills + body — with the
-// most recent one open, so more text can be selected from it immediately.
-// Fetched on every window focus; typing replaces them with real search hits.
+// most recent one open, so more text can be selected from it immediately and
+// the other recent entries are one click away. Fetched on every window focus;
+// typing replaces them with real search hits.
 let topics = [];
+// True while showing the recent-topics state (vs. live search results).
+let inTopics = false;
 
 function renderMatches() {
   $matches.replaceChildren();
-  if (results.length <= 1) return;
+  // In topics mode always show the pills — even a single one — so the user
+  // can see which recent entry the body belongs to and switch between them.
+  // In search mode a lone result needs no pill.
+  if (!inTopics && results.length <= 1) return;
   results.forEach((r, i) => {
     const el = document.createElement("div");
     el.className = "pill" + (i === activeIdx ? " active" : "");
@@ -50,6 +56,7 @@ function render() {
 
 // Load the recent topics as the current result set (most recent one open).
 function showTopics() {
+  inTopics = topics.length > 0;
   results = topics.slice();
   activeIdx = 0;
   render();
@@ -79,6 +86,7 @@ async function doSearch() {
     showTopics();
     return;
   }
+  inTopics = false;
   try {
     results = await invoke("search_entries", { query: q });
   } catch (e) {
