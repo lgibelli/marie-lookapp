@@ -785,6 +785,38 @@ fn show_manage(app: &tauri::AppHandle) {
     }
 }
 
+/// Show + focus the startup/about window (tray "About Marie Lookup…"). The
+/// window doubles as the about box: it already shows name, version, hotkey
+/// and hosts the update UI + releases link.
+fn show_startup(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("startup") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
+/// Open the public releases page in the default browser. A dedicated command
+/// (rather than tauri-plugin-opener) because it's one fixed URL.
+#[tauri::command]
+fn open_releases_page() -> Result<(), AppError> {
+    let url = "https://github.com/lgibelli/marie-lookapp-releases/releases";
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open").arg(url).spawn()?;
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()?;
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    std::process::Command::new("xdg-open").arg(url).spawn()?;
+    Ok(())
+}
+
 fn show_lookup(app: &tauri::AppHandle) {
     // Don't pop the lookup window back up while a paste is mid-flight — that
     // would steal focus from the target app and the ⌘V would land in our own
@@ -837,6 +869,10 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         // Native folder/file pickers for the backup UI in the Manage window.
         .plugin(tauri_plugin_dialog::init())
+        // relaunch() after a macOS update — the updater swaps the .app on
+        // disk but the old process keeps running (Windows restarts via the
+        // installer instead and never reaches the relaunch call).
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // DB + shared state. Manage AppState before the tray/hotkey are wired
             // up so any handler that reads it always finds it.
@@ -929,11 +965,13 @@ pub fn run() {
             let manage_item = MenuItemBuilder::with_id("manage", "Manage entries…").build(app)?;
             let check_item =
                 MenuItemBuilder::with_id("check-updates", "Check for updates…").build(app)?;
+            let about_item =
+                MenuItemBuilder::with_id("about", "About Marie Lookup…").build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "Quit")
                 .accelerator("CmdOrCtrl+Q")
                 .build(app)?;
             let menu = MenuBuilder::new(app)
-                .items(&[&show_item, &manage_item, &check_item])
+                .items(&[&show_item, &manage_item, &check_item, &about_item])
                 .separator()
                 .item(&quit_item)
                 .build()?;
@@ -951,6 +989,7 @@ pub fn run() {
                     "check-updates" => {
                         let _ = app.emit_to("startup", "check-updates", ());
                     }
+                    "about" => show_startup(app),
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -1003,6 +1042,7 @@ pub fn run() {
             set_backup_dir,
             restore_backup,
             list_versions,
+            open_releases_page,
         ])
         .on_window_event(|window, event| {
             // Keep the app running when the manage window is closed:

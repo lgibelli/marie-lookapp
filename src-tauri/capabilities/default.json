@@ -8,6 +8,7 @@
     "autostart:default",
     "updater:default",
     "dialog:default",
+    "process:default",
     "core:window:allow-show",
     "core:window:allow-hide"
   ]

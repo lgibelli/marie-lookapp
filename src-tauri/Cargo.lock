@@ -2058,7 +2058,7 @@ dependencies = [
 
 [[package]]
 name = "marie-lookup"
-version = "2.0.0-rc.2"
+version = "2.0.0-rc.3"
 dependencies = [
  "arboard",
  "enigo",
@@ -2071,6 +2071,7 @@ dependencies = [
  "tauri-plugin-autostart",
  "tauri-plugin-dialog",
  "tauri-plugin-global-shortcut",
+ "tauri-plugin-process",
  "tauri-plugin-updater",
  "tokio",
 ]
@@ -3802,6 +3803,16 @@ dependencies = [
  "tauri",
  "tauri-plugin",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "tauri-plugin-process"
+version = "2.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d55511a7bf6cd70c8767b02c97bf8134fa434daf3926cfc1be0a0f94132d165a"
+dependencies = [
+ "tauri",
+ "tauri-plugin",
 ]
 
 [[package]]

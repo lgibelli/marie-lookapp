@@ -227,7 +227,17 @@ body.startup .hidden { display: none; }
 .startup-actions {
   margin-top: auto;
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
+}
+.startup-actions button.linklike {
+  background: none;
+  border: none;
+  color: var(--accent);
+  padding: 0;
+  cursor: pointer;
+  font-size: 12px;
+  text-decoration: underline;
 }
 .startup-actions button {
   background: var(--accent);

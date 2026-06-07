@@ -136,6 +136,10 @@ $recorder.addEventListener("blur", () => {
 $cancel.addEventListener("click", stopRecording);
 $change.addEventListener("click", startRecording);
 
+document.getElementById("releases-link").addEventListener("click", () => {
+  invoke("open_releases_page").catch(() => {});
+});
+
 $ok.addEventListener("click", async () => {
   if (document.getElementById("dont-show").checked) {
     localStorage.setItem(DISMISS_KEY, "1");
@@ -251,8 +255,11 @@ $updateInstall.addEventListener("click", async () => {
         setStatus("Installing update — the app will restart…", true);
       }
     });
-    // On Windows the process exits while the installer runs; nothing after
-    // this point is expected to execute.
+    // Windows never reaches this line — the installer exits the app and
+    // relaunches it itself. On macOS the new .app is on disk but this old
+    // process keeps running: relaunch into the new version ourselves.
+    setStatus("Restarting…", true);
+    await window.__TAURI__.process.relaunch();
   } catch (err) {
     setStatus(`Update failed: ${err}`, false);
     $updateInstall.disabled = false;
