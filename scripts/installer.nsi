@@ -52,6 +52,14 @@ Section "Marie LookApp" SecMain
   SectionIn RO
   SetOutPath "$INSTDIR"
 
+  ; Kill a running instance so the exe can be overwritten. Auto-updates run
+  ; this installer silently while the old app is exiting (the Tauri updater
+  ; spawns us then exits the app — there can be a brief overlap). A graceful
+  ; close won't do: the app intercepts WM_CLOSE to hide instead of quit.
+  nsExec::Exec 'taskkill /F /IM marie-lookup.exe'
+  Pop $0
+  Sleep 400
+
   File "/oname=marie-lookup.exe" "${APP_EXE_PATH}"
 
   ; --- WebView2 runtime check ---
@@ -92,6 +100,13 @@ Section "Marie LookApp" SecMain
   WriteRegStr ${APP_REG_ROOT} "${APP_REG_UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\marie-lookup.exe"
   WriteRegDWORD ${APP_REG_ROOT} "${APP_REG_UNINSTALL_KEY}" "NoModify" 1
   WriteRegDWORD ${APP_REG_ROOT} "${APP_REG_UNINSTALL_KEY}" "NoRepair" 1
+
+  ; Relaunch the app after a silent install. The Tauri updater invokes us with
+  ; "/S /R /UPDATE ..." — vanilla NSIS only understands /S and ignores the
+  ; rest, so implement the /R (relaunch) behavior ourselves. Interactive
+  ; installs get the MUI finish-page "run" checkbox instead.
+  IfSilent 0 +2
+    Exec '"$INSTDIR\marie-lookup.exe"'
 SectionEnd
 
 Section "Uninstall"

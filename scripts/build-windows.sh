@@ -162,22 +162,31 @@ if [ "${BUILD_INSTALLER:-0}" = "1" ]; then
       exit 1
     fi
     echo ">> verifying WebView2 bootstrapper Authenticode signature"
-    # Output-string match depends on osslsigncode's format; both lines below are
-    # present for a validly Microsoft-signed PE.
-    WV2_VERIFY="$(osslsigncode verify "${WV2_BOOTSTRAPPER}" 2>&1 || true)"
-    if ! grep -q "Signature verification: ok" <<<"${WV2_VERIFY}"; then
-      echo "error: WebView2 bootstrapper failed Authenticode verification." >&2
+    # Chain validation needs Microsoft's code-signing roots, which are NOT in
+    # the default OpenSSL CA store (they're not TLS roots) — use the bundle
+    # pinned in-repo (scripts/microsoft-roots.pem; 2010 + 2011 + Identity
+    # Verification 2020). The bootstrapper carries TWO signatures:
+    #   Index 0 (primary)  — real Microsoft Corporation signature; must chain.
+    #   Index 1 ("EdgeBuild") — self-signed tag signature holding the
+    #     appguid/appname install parameters; by design it never chains to a
+    #     public root, so it is excluded from the chain requirement.
+    MS_ROOTS="${PROJECT_ROOT}/scripts/microsoft-roots.pem"
+    WV2_VERIFY="$(osslsigncode verify -CAfile "${MS_ROOTS}" -TSA-CAfile "${MS_ROOTS}" \
+      "${WV2_BOOTSTRAPPER}" 2>&1 || true)"
+    WV2_PRIMARY="$(sed -n '/^Signature Index: 0/,/^Signature Index: [1-9]/p' <<<"${WV2_VERIFY}")"
+    if ! grep -q "Signature verification: ok" <<<"${WV2_PRIMARY}"; then
+      echo "error: WebView2 bootstrapper primary signature failed verification." >&2
       echo "       delete ${WV2_BOOTSTRAPPER} and re-run to re-download." >&2
       echo "${WV2_VERIFY}" >&2
       exit 1
     fi
-    if ! grep -qi "Microsoft Corporation" <<<"${WV2_VERIFY}"; then
+    if ! grep -qi "Subject: CN=Microsoft Corporation" <<<"${WV2_PRIMARY}"; then
       echo "error: WebView2 bootstrapper is not signed by Microsoft Corporation." >&2
       echo "       delete ${WV2_BOOTSTRAPPER} and re-run to re-download." >&2
       echo "${WV2_VERIFY}" >&2
       exit 1
     fi
-    echo "   bootstrapper signature OK (Microsoft Corporation)"
+    echo "   bootstrapper signature OK (Microsoft Corporation, chain verified)"
   fi
 
   APP_VERSION="$(node -e "console.log(require('${PROJECT_ROOT}/package.json').version)")"
