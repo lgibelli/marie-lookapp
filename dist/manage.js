@@ -443,7 +443,12 @@ let backupDir = null;
 async function refreshBackups() {
   try {
     const info = await invoke("backup_info");
-    backupDir = info.dir;
+    backupDir = info.dir; // null until the user picks a folder
+    if (!info.dir) {
+      $backupStatus.textContent = "No backup folder chosen — click Folder…";
+      $backupStatus.title = "";
+      return;
+    }
     if (info.backups.length) {
       const latest = new Date(info.backups[0].modified * 1000);
       $backupStatus.textContent =
@@ -459,13 +464,38 @@ async function refreshBackups() {
   }
 }
 
+// Folder choice is always explicit — there is no automatic default path.
+async function chooseBackupFolder() {
+  const dir = await window.__TAURI__.dialog.open({
+    directory: true,
+    defaultPath: backupDir || undefined,
+    title: "Choose backup folder",
+  });
+  if (!dir) return false;
+  await invoke("set_backup_dir", { dir });
+  await refreshBackups();
+  return true;
+}
+
 $backupNow.addEventListener("click", async () => {
   $backupNow.disabled = true;
   try {
     await invoke("backup_now");
     await refreshBackups();
   } catch (e) {
-    await dialogMessage("Backup failed: " + e, { title: "Marie Lookup", kind: "error" });
+    // CONTRACT: matches the error string in do_backup (lib.rs).
+    if (String(e) === "no_backup_dir") {
+      try {
+        await chooseBackupFolder(); // set_backup_dir does an immediate backup
+      } catch (e2) {
+        await dialogMessage("Couldn't set backup folder: " + e2, {
+          title: "Marie Lookup",
+          kind: "error",
+        });
+      }
+    } else {
+      await dialogMessage("Backup failed: " + e, { title: "Marie Lookup", kind: "error" });
+    }
   } finally {
     $backupNow.disabled = false;
   }
@@ -473,14 +503,7 @@ $backupNow.addEventListener("click", async () => {
 
 $backupFolder.addEventListener("click", async () => {
   try {
-    const dir = await window.__TAURI__.dialog.open({
-      directory: true,
-      defaultPath: backupDir || undefined,
-      title: "Choose backup folder",
-    });
-    if (!dir) return;
-    await invoke("set_backup_dir", { dir });
-    await refreshBackups();
+    await chooseBackupFolder();
   } catch (e) {
     await dialogMessage("Couldn't set backup folder: " + e, {
       title: "Marie Lookup",

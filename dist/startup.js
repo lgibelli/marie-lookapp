@@ -214,6 +214,32 @@ async function maybePromptUpdate() {
   await win.show();
 }
 
+// Backup reminder, emitted by backup_maintenance (lib.rs) when entries have
+// changed but no backup happened for 72h — i.e. no backup folder is chosen
+// yet, or backups keep failing. The folder is ALWAYS picked by the user;
+// there is no automatic default path.
+window.__TAURI__.event.listen("backup-nag", async () => {
+  const dialog = window.__TAURI__.dialog;
+  const choose = await dialog.ask(
+    "Your entries have changed, but no backup has been made in the last 3 days.\n\n" +
+      "Choose a backup folder now? Tip: pick a OneDrive/iCloud-synced folder " +
+      "so backups are stored off this machine too.",
+    { title: "Backup reminder", okLabel: "Choose folder…", cancelLabel: "Later" }
+  );
+  if (!choose) return;
+  const dir = await dialog.open({ directory: true, title: "Choose backup folder" });
+  if (!dir) return;
+  try {
+    await invoke("set_backup_dir", { dir }); // takes an immediate backup
+    setStatus("Backup folder set — first backup done.", true);
+  } catch (err) {
+    await dialog.message("Couldn't set backup folder: " + err, {
+      title: "Marie Lookup",
+      kind: "error",
+    });
+  }
+});
+
 // Tray menu "Check for updates…" — an explicit user action, so it bypasses
 // both the hourly cadence and the daily prompt cap, and always reports the
 // outcome (including "up to date", which background checks never show).

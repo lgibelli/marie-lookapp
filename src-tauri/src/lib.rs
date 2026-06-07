@@ -291,18 +291,20 @@ fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()
 
 const BACKUP_KEEP: usize = 30;
 
-/// User-chosen backup folder, or `<app_data_dir>/backups`. Created on demand.
-fn backup_dir(app: &tauri::AppHandle, conn: &Connection) -> std::path::PathBuf {
-    let dir = setting(conn, "backup_dir")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            app.path()
-                .app_data_dir()
-                .expect("app_data_dir")
-                .join("backups")
-        });
+/// User-chosen backup folder. Deliberately NO automatic default: the user
+/// must pick a location (ideally a cloud-synced one) before any backup is
+/// written — see the 72h reminder in `backup_maintenance`. Created on demand.
+fn backup_dir(conn: &Connection) -> Option<std::path::PathBuf> {
+    let dir = setting(conn, "backup_dir").map(std::path::PathBuf::from)?;
     std::fs::create_dir_all(&dir).ok();
-    dir
+    Some(dir)
+}
+
+fn now_epoch() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// Backups in `dir`, newest first (the timestamped names sort lexically).
@@ -325,10 +327,14 @@ fn list_backup_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 }
 
 /// Snapshot the live DB into the backup dir, then prune to BACKUP_KEEP.
+/// Errors with the literal "no_backup_dir" (matched in dist/manage.js) when
+/// the user hasn't chosen a folder yet.
 fn do_backup(app: &tauri::AppHandle) -> Result<std::path::PathBuf, AppError> {
     let db = app.state::<Db>();
     let conn = db.0.lock()?;
-    let dir = backup_dir(app, &conn);
+    let Some(dir) = backup_dir(&conn) else {
+        return Err("no_backup_dir".into());
+    };
     let stamp: String =
         conn.query_row("SELECT strftime('%Y%m%d-%H%M%S','now')", [], |r| r.get(0))?;
     let path = dir.join(format!("marie-lookup-{stamp}.db"));
@@ -337,6 +343,9 @@ fn do_backup(app: &tauri::AppHandle) -> Result<std::path::PathBuf, AppError> {
         std::fs::remove_file(&path)?;
     }
     conn.execute("VACUUM INTO ?1", params![path.to_string_lossy()])?;
+    // Bookkeeping for the 72h reminder: backup done, nothing dirty anymore.
+    set_setting(&conn, "last_backup_at", &now_epoch().to_string())?;
+    let _ = conn.execute("DELETE FROM settings WHERE key='dirty_since'", []);
     drop(conn);
     for old in list_backup_files(&dir).into_iter().skip(BACKUP_KEEP) {
         let _ = std::fs::remove_file(old);
@@ -345,8 +354,22 @@ fn do_backup(app: &tauri::AppHandle) -> Result<std::path::PathBuf, AppError> {
 }
 
 /// Debounced auto-backup: runs 60s after the latest mutation unless a newer
-/// mutation superseded it. See AppState::backup_gen.
+/// mutation superseded it. See AppState::backup_gen. Also stamps
+/// `dirty_since` (cleared by a successful backup) so `backup_maintenance`
+/// can remind the user after 72h without one.
 fn schedule_backup(app: &tauri::AppHandle) {
+    if let Some(db) = app.try_state::<Db>() {
+        if let Ok(conn) = db.0.lock() {
+            // Insert-if-absent: dirty_since marks the FIRST un-backed-up
+            // change, so continuous editing can't postpone the reminder.
+            let _ = conn.execute(
+                "INSERT INTO settings (key, value)
+                 SELECT 'dirty_since', strftime('%s','now')
+                 WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key='dirty_since')",
+                [],
+            );
+        }
+    }
     let state = app.state::<AppState>();
     let gen = state.backup_gen.fetch_add(1, Ordering::SeqCst) + 1;
     let app = app.clone();
@@ -356,9 +379,62 @@ fn schedule_backup(app: &tauri::AppHandle) {
             return;
         }
         if let Err(e) = do_backup(&app) {
-            eprintln!("auto-backup failed: {e}");
+            // Quietly skip when no folder is chosen — the 72h reminder in
+            // backup_maintenance owns that situation.
+            if e.0 != "no_backup_dir" {
+                eprintln!("auto-backup failed: {e}");
+            }
         }
     });
+}
+
+/// Hourly housekeeping (first run shortly after launch):
+/// - backup folder chosen → safety-net backup when there are changes and the
+///   last backup is >24h old;
+/// - no folder (or backups keep failing) → after 72h with un-backed-up
+///   changes, emit `backup-nag` so the startup window asks the user to
+///   choose a folder (at most once per day). The path is never auto-picked.
+fn backup_maintenance(app: &tauri::AppHandle) {
+    const DAY: i64 = 86400;
+    let now = now_epoch();
+    let snapshot = {
+        let db = app.state::<Db>();
+        let guard = db.0.lock();
+        match guard {
+            Ok(conn) => Some((
+                setting(&conn, "backup_dir").is_some(),
+                setting(&conn, "dirty_since").and_then(|s| s.parse::<i64>().ok()),
+                setting(&conn, "last_backup_at").and_then(|s| s.parse::<i64>().ok()),
+                setting(&conn, "last_nag_at").and_then(|s| s.parse::<i64>().ok()),
+            )),
+            Err(_) => None,
+        }
+    };
+    let Some((has_dir, dirty_since, last_backup, last_nag)) = snapshot else {
+        return;
+    };
+    let Some(dirty) = dirty_since else { return }; // nothing to protect
+    let mut nag = false;
+    if has_dir {
+        if last_backup.is_none_or(|b| now - b > DAY) {
+            if let Err(e) = do_backup(app) {
+                eprintln!("safety-net backup failed: {e}");
+                nag = now - dirty >= 3 * DAY; // folder broken for days → ask again
+            }
+        }
+    } else {
+        nag = now - dirty >= 3 * DAY;
+    }
+    if nag && last_nag.is_none_or(|n| now - n >= DAY) {
+        {
+            let db = app.state::<Db>();
+            let guard = db.0.lock();
+            if let Ok(conn) = guard {
+                let _ = set_setting(&conn, "last_nag_at", &now.to_string());
+            }
+        }
+        let _ = app.emit_to("startup", "backup-nag", ());
+    }
 }
 
 #[tauri::command]
@@ -556,15 +632,22 @@ struct BackupFile {
 
 #[derive(Serialize)]
 struct BackupInfo {
-    dir: String,
+    /// None until the user has chosen a backup folder.
+    dir: Option<String>,
     backups: Vec<BackupFile>,
 }
 
 #[tauri::command]
-fn backup_info(app: tauri::AppHandle, db: tauri::State<Db>) -> Result<BackupInfo, AppError> {
+fn backup_info(db: tauri::State<Db>) -> Result<BackupInfo, AppError> {
     let dir = {
         let conn = db.0.lock()?;
-        backup_dir(&app, &conn)
+        backup_dir(&conn)
+    };
+    let Some(dir) = dir else {
+        return Ok(BackupInfo {
+            dir: None,
+            backups: Vec::new(),
+        });
     };
     let backups = list_backup_files(&dir)
         .into_iter()
@@ -585,7 +668,7 @@ fn backup_info(app: tauri::AppHandle, db: tauri::State<Db>) -> Result<BackupInfo
         })
         .collect();
     Ok(BackupInfo {
-        dir: dir.display().to_string(),
+        dir: Some(dir.display().to_string()),
         backups,
     })
 }
@@ -1048,29 +1131,17 @@ pub fn run() {
                 prev_foreground: std::sync::atomic::AtomicIsize::new(0),
             });
 
-            // Safety-net backup: if the newest snapshot is older than a day
-            // (or none exists), take one shortly after startup. Delayed a bit
-            // so it never competes with launch work.
+            // Backup housekeeping: safety-net backups + the 72h "please pick
+            // a backup folder" reminder. First pass shortly after launch
+            // (delayed so it never competes with launch work), then hourly —
+            // the app is tray-resident and can run for weeks.
             {
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_secs(20)).await;
-                    let stale = {
-                        let db = app_handle.state::<Db>();
-                        let Ok(conn) = db.0.lock() else { return };
-                        let dir = backup_dir(&app_handle, &conn);
-                        list_backup_files(&dir).first().map_or(true, |newest| {
-                            std::fs::metadata(newest)
-                                .and_then(|m| m.modified())
-                                .ok()
-                                .and_then(|t| t.elapsed().ok())
-                                .is_none_or(|age| age.as_secs() > 24 * 60 * 60)
-                        })
-                    };
-                    if stale {
-                        if let Err(e) = do_backup(&app_handle) {
-                            eprintln!("startup backup failed: {e}");
-                        }
+                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                    loop {
+                        backup_maintenance(&app_handle);
+                        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
                     }
                 });
             }
