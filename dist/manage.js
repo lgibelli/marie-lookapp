@@ -44,7 +44,15 @@ function renderList() {
   for (const e of filtered) {
     const div = document.createElement("div");
     div.className = "item" + (e.id === selectedId ? " active" : "");
-    div.textContent = e.title || "(untitled)";
+    const title = document.createElement("span");
+    title.className = "item-title";
+    title.textContent = e.title || "(untitled)";
+    const date = document.createElement("span");
+    date.className = "item-date";
+    const d = new Date(e.updated_at * 1000);
+    date.textContent = d.toLocaleDateString();
+    date.title = "Last modified " + d.toLocaleString();
+    div.append(title, date);
     div.addEventListener("click", () => selectEntry(e.id));
     $list.appendChild(div);
   }
@@ -57,27 +65,53 @@ function isEditing() {
   return document.body.classList.contains("editing");
 }
 
+// Last-loaded values — the Save button stays disabled until the fields
+// actually differ from them (and is re-disabled right after a save).
+let loadedTitle = "";
+let loadedBody = "";
+
+function updateSaveState() {
+  if (!isEditing() || inHistory()) {
+    $saveBtn.disabled = true;
+    return;
+  }
+  if (selectedId == null) {
+    $saveBtn.disabled = !($title.value.trim() || $body.value.trim());
+  } else {
+    $saveBtn.disabled = $title.value === loadedTitle && $body.value === loadedBody;
+  }
+}
+
 function selectEntry(id) {
   const e = entries.find((x) => x.id === id);
   if (!e) return;
+  exitHistory();
   selectedId = id;
   $title.value = e.title;
   $body.value = e.body;
+  loadedTitle = e.title;
+  loadedBody = e.body;
   document.body.classList.add("editing", "has-selection");
   renderList();
+  updateSaveState();
 }
 
 function newEntry() {
+  exitHistory();
   selectedId = null;
   $title.value = "";
   $body.value = "";
+  loadedTitle = "";
+  loadedBody = "";
   document.body.classList.add("editing");
   document.body.classList.remove("has-selection");
   renderList();
+  updateSaveState();
   setTimeout(() => $title.focus(), 0);
 }
 
 async function save() {
+  if ($saveBtn.disabled || inHistory()) return;
   const title = $title.value.trim();
   const body = $body.value;
   if (!title && !body.trim()) return;
@@ -110,10 +144,105 @@ async function del() {
   }
 }
 
+// ---- Time machine (view-only version history) -------------------------------
+// ↺ next to the title steps into the entry's saved versions (newest previous
+// first); ‹ Older / Newer › navigate, Exit returns to the live, editable
+// entry. Fields are read-only while viewing history (copying text out is
+// fine), Save/Delete are disabled.
+
+const $historyBtn = document.getElementById("history-btn");
+const $historyBar = document.getElementById("history-bar");
+const $historyInfo = document.getElementById("history-info");
+const $historyOlder = document.getElementById("history-older");
+const $historyNewer = document.getElementById("history-newer");
+const $historyExit = document.getElementById("history-exit");
+
+let versions = [];
+let versionIdx = -1; // -1 = live entry, 0 = newest previous version
+
+function inHistory() {
+  return versionIdx >= 0;
+}
+
+function renderHistory() {
+  if (!inHistory()) {
+    $historyBar.classList.add("hidden");
+    $title.readOnly = false;
+    $body.readOnly = false;
+    $deleteBtn.disabled = false;
+    $historyBtn.disabled = false;
+    updateSaveState();
+    return;
+  }
+  const v = versions[versionIdx];
+  $title.value = v.title;
+  $body.value = v.body;
+  $title.readOnly = true;
+  $body.readOnly = true;
+  $deleteBtn.disabled = true;
+  $historyBtn.disabled = true;
+  $historyInfo.textContent =
+    `Viewing version ${versions.length - versionIdx} of ${versions.length}` +
+    ` — saved ${new Date(v.saved_at * 1000).toLocaleString()} (read-only)`;
+  $historyOlder.disabled = versionIdx >= versions.length - 1;
+  $historyBar.classList.remove("hidden");
+  $saveBtn.disabled = true;
+}
+
+function exitHistory() {
+  if (!inHistory()) return;
+  versionIdx = -1;
+  versions = [];
+  const e = entries.find((x) => x.id === selectedId);
+  if (e) {
+    $title.value = e.title;
+    $body.value = e.body;
+  }
+  renderHistory();
+}
+
+$historyBtn.addEventListener("click", async () => {
+  if (selectedId == null || inHistory()) return;
+  let list;
+  try {
+    list = await invoke("list_versions", { entryId: selectedId });
+  } catch (e) {
+    alert("Couldn't load history: " + e);
+    return;
+  }
+  if (!list.length) {
+    alert("No previous versions of this entry yet — history starts with the next save.");
+    return;
+  }
+  versions = list;
+  versionIdx = 0;
+  renderHistory();
+});
+
+$historyOlder.addEventListener("click", () => {
+  if (versionIdx < versions.length - 1) {
+    versionIdx += 1;
+    renderHistory();
+  }
+});
+
+$historyNewer.addEventListener("click", () => {
+  if (versionIdx > 0) {
+    versionIdx -= 1;
+    renderHistory();
+  } else {
+    exitHistory();
+  }
+});
+
+$historyExit.addEventListener("click", exitHistory);
+
 $newBtn.addEventListener("click", newEntry);
 $saveBtn.addEventListener("click", save);
 $deleteBtn.addEventListener("click", del);
 $filter.addEventListener("input", renderList);
+$title.addEventListener("input", updateSaveState);
+$body.addEventListener("input", updateSaveState);
 
 document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === "s") {
@@ -122,6 +251,8 @@ document.addEventListener("keydown", (e) => {
   } else if ((e.metaKey || e.ctrlKey) && e.key === "n") {
     e.preventDefault();
     newEntry();
+  } else if (e.key === "Escape" && inHistory()) {
+    exitHistory();
   }
 });
 

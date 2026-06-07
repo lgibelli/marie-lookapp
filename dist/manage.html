@@ -31,11 +31,22 @@
       <div class="editor-placeholder">
         Select an entry on the left, or click <strong>+ New</strong> to add one.
       </div>
-      <input id="title" class="title" type="text" placeholder="Title" />
+      <div class="editor-head">
+        <input id="title" class="title" type="text" placeholder="Title" />
+        <button id="history-btn" title="View previous versions of this entry">↺</button>
+        <button id="save-btn" class="primary">Save</button>
+      </div>
+      <div id="history-bar" class="history-bar hidden">
+        <span id="history-info"></span>
+        <span class="history-nav">
+          <button id="history-older">‹ Older</button>
+          <button id="history-newer">Newer ›</button>
+          <button id="history-exit" class="primary">Exit</button>
+        </span>
+      </div>
       <textarea id="body" class="body" placeholder="Body…"></textarea>
       <div class="editor-actions">
         <button id="delete-btn" class="danger">Delete</button>
-        <button id="save-btn" class="primary">Save</button>
       </div>
     </main>
     <script src="manage.js"></script>

@@ -145,15 +145,18 @@ pub struct Entry {
     pub id: i64,
     pub title: String,
     pub body: String,
+    /// Unix epoch seconds; shown next to each entry in the Manage sidebar.
+    pub updated_at: i64,
 }
 
-/// Single source of truth for mapping a `SELECT id, title, body` row into an
-/// `Entry` — shared by `list_entries` and `search_entries`.
+/// Single source of truth for mapping a `SELECT id, title, body, updated_at`
+/// row into an `Entry` — shared by `list_entries` and `search_entries`.
 fn row_to_entry(row: &rusqlite::Row) -> rusqlite::Result<Entry> {
     Ok(Entry {
         id: row.get(0)?,
         title: row.get(1)?,
         body: row.get(2)?,
+        updated_at: row.get(3)?,
     })
 }
 
@@ -206,6 +209,26 @@ fn open_db(path: &std::path::Path) -> rusqlite::Result<Connection> {
             );",
         )?;
         conn.pragma_update(None, "user_version", 2)?;
+    }
+    if version < 3 {
+        // Per-entry version history for the Manage window's view-only "time
+        // machine". `update_entry` snapshots the previous state here before
+        // overwriting (capped at 50 per entry); `saved_at` is the moment
+        // that version was originally saved, not when it was superseded.
+        // Cleanup on entry deletion is done explicitly in `delete_entry` —
+        // SQLite foreign keys are off by default and we don't turn them on.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS entry_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entry_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                body TEXT NOT NULL,
+                saved_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_entry_versions_entry
+                ON entry_versions(entry_id, id);",
+        )?;
+        conn.pragma_update(None, "user_version", 3)?;
     }
     Ok(conn)
 }
@@ -310,7 +333,8 @@ fn schedule_backup(app: &tauri::AppHandle) {
 #[tauri::command]
 fn list_entries(db: tauri::State<Db>) -> Result<Vec<Entry>, AppError> {
     let conn = db.0.lock()?;
-    let mut stmt = conn.prepare("SELECT id, title, body FROM entries ORDER BY updated_at DESC")?;
+    let mut stmt =
+        conn.prepare("SELECT id, title, body, updated_at FROM entries ORDER BY updated_at DESC")?;
     let entries = stmt
         .query_map([], row_to_entry)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -335,7 +359,7 @@ fn search_entries(db: tauri::State<Db>, query: String) -> Result<Vec<Entry>, App
     let like = format!("%{}%", escaped);
     let conn = db.0.lock()?;
     let mut stmt = conn.prepare(
-        "SELECT id, title, body FROM entries \
+        "SELECT id, title, body, updated_at FROM entries \
          WHERE title LIKE ?1 ESCAPE '\\' OR body LIKE ?1 ESCAPE '\\' \
          ORDER BY (title LIKE ?1 ESCAPE '\\') DESC, updated_at DESC \
          LIMIT 20",
@@ -375,9 +399,24 @@ fn update_entry(
 ) -> Result<(), AppError> {
     {
         let conn = db.0.lock()?;
+        // Snapshot the outgoing state for the time machine — only when the
+        // content actually changed, so no-op saves don't spam history.
+        conn.execute(
+            "INSERT INTO entry_versions (entry_id, title, body, saved_at)
+             SELECT id, title, body, updated_at FROM entries
+             WHERE id = ?1 AND (title <> ?2 OR body <> ?3)",
+            params![id, title, body],
+        )?;
         conn.execute(
             "UPDATE entries SET title=?1, body=?2, updated_at=strftime('%s','now') WHERE id=?3",
             params![title, body, id],
+        )?;
+        // Cap history per entry.
+        conn.execute(
+            "DELETE FROM entry_versions WHERE entry_id = ?1 AND id NOT IN (
+                SELECT id FROM entry_versions WHERE entry_id = ?1
+                ORDER BY id DESC LIMIT 50)",
+            params![id],
         )?;
     }
     schedule_backup(&app);
@@ -389,9 +428,42 @@ fn delete_entry(app: tauri::AppHandle, db: tauri::State<Db>, id: i64) -> Result<
     {
         let conn = db.0.lock()?;
         conn.execute("DELETE FROM entries WHERE id=?1", params![id])?;
+        // No FK cascade (foreign_keys pragma is off) — clean up history here.
+        conn.execute("DELETE FROM entry_versions WHERE entry_id=?1", params![id])?;
     }
     schedule_backup(&app);
     Ok(())
+}
+
+#[derive(Serialize)]
+struct EntryVersion {
+    id: i64,
+    title: String,
+    body: String,
+    /// When this version was originally saved (epoch seconds).
+    saved_at: i64,
+}
+
+/// Previous versions of an entry, newest first. Powers the Manage window's
+/// view-only time machine.
+#[tauri::command]
+fn list_versions(db: tauri::State<Db>, entry_id: i64) -> Result<Vec<EntryVersion>, AppError> {
+    let conn = db.0.lock()?;
+    let mut stmt = conn.prepare(
+        "SELECT id, title, body, saved_at FROM entry_versions
+         WHERE entry_id = ?1 ORDER BY id DESC",
+    )?;
+    let versions = stmt
+        .query_map([entry_id], |r| {
+            Ok(EntryVersion {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                body: r.get(2)?,
+                saved_at: r.get(3)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(versions)
 }
 
 #[derive(Serialize)]
@@ -481,13 +553,29 @@ fn restore_backup(
             if has_entries == 0 {
                 return Err("not a Marie Lookup backup (no entries table)".into());
             }
-            conn.execute_batch(
+            // Pre-v3 backups have no entry_versions table; in that case the
+            // local history is cleared (it would describe entries that no
+            // longer match) instead of copied.
+            let bak_has_versions: i64 = conn.query_row(
+                "SELECT count(*) FROM bak.sqlite_master WHERE type='table' AND name='entry_versions'",
+                [],
+                |r| r.get(0),
+            )?;
+            let copy_versions = if bak_has_versions > 0 {
+                "INSERT INTO main.entry_versions (id, entry_id, title, body, saved_at)
+                   SELECT id, entry_id, title, body, saved_at FROM bak.entry_versions;"
+            } else {
+                ""
+            };
+            conn.execute_batch(&format!(
                 "BEGIN;
                  DELETE FROM main.entries;
                  INSERT INTO main.entries (id, title, body, created_at, updated_at)
                    SELECT id, title, body, created_at, updated_at FROM bak.entries;
-                 COMMIT;",
-            )?;
+                 DELETE FROM main.entry_versions;
+                 {copy_versions}
+                 COMMIT;"
+            ))?;
             Ok(conn.query_row("SELECT count(*) FROM main.entries", [], |r| r.get(0))?)
         })();
         if result.is_err() {
@@ -914,6 +1002,7 @@ pub fn run() {
             backup_now,
             set_backup_dir,
             restore_backup,
+            list_versions,
         ])
         .on_window_event(|window, event| {
             // Keep the app running when the manage window is closed:

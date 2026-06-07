@@ -290,7 +290,22 @@ body.manage {
   border-bottom: 1px solid var(--border);
   cursor: pointer;
   font-size: 13px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
 }
+.sidebar-list .item .item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-list .item .item-date {
+  font-size: 10px;
+  color: var(--fg-dim);
+  flex-shrink: 0;
+}
+.sidebar-list .item.active .item-date { color: rgba(255, 255, 255, 0.85); }
 .sidebar-list .item:hover { background: rgba(127,127,127,0.08); }
 .sidebar-list .item.active {
   background: var(--accent);
@@ -354,7 +369,64 @@ body.manage {
   flex-direction: column;
   padding: 14px;
   gap: 10px;
+  /* Without this, a long pasted body sets the textarea's intrinsic min
+     height (flex min-height:auto) and pushes everything below it out of
+     the window. */
+  min-height: 0;
+  overflow: hidden;
 }
+.editor-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.editor-head button {
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--fg);
+  padding: 7px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.editor-head button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+.editor-head button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+#history-btn { font-size: 15px; padding: 6px 10px; }
+.history-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+.history-nav { display: flex; gap: 6px; flex-shrink: 0; }
+.history-nav button {
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--fg);
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.history-nav button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+.history-nav button:disabled { opacity: 0.4; cursor: not-allowed; }
+body.manage .hidden { display: none; }
 .editor input.title {
   background: var(--bg-input);
   color: var(--fg);
@@ -367,6 +439,7 @@ body.manage {
 }
 .editor textarea.body {
   flex: 1;
+  min-height: 0; /* see .editor — keeps huge pasted text from overflowing */
   background: var(--bg-input);
   color: var(--fg);
   border: 1px solid var(--border);
@@ -417,14 +490,17 @@ body.manage {
 
 /* Editor visibility. The editor shows a placeholder until an entry is selected
    or a new one is started; toggling `editing` on <body> swaps placeholder ↔
-   fields, and `has-selection` reveals the Delete button (only existing entries
-   can be deleted). Replaces the per-element style.display toggling in manage.js. */
-.editor .title,
+   fields, and `has-selection` reveals Delete + the history button (only
+   existing entries have either). Replaces per-element style.display toggling
+   in manage.js. */
+.editor .editor-head,
 .editor .body,
 .editor .editor-actions { display: none; }
 .editing .editor .editor-placeholder { display: none; }
-.editing .editor .title { display: block; }
+.editing .editor .editor-head { display: flex; }
 .editing .editor .body { display: block; }
 .editing .editor .editor-actions { display: flex; }
 #delete-btn { display: none; }
 .has-selection #delete-btn { display: inline-block; }
+#history-btn { display: none; }
+.has-selection #history-btn { display: inline-block; }
