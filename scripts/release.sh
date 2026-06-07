@@ -87,11 +87,25 @@ echo ">> building macOS bundle (app + updater artifact + dmg)"
 (cd "${ROOT}" && TAURI_SIGNING_PRIVATE_KEY="${UPDATER_KEY}" \
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" npx tauri build --bundles app)
 BUNDLE_DIR="${ROOT}/src-tauri/target/release/bundle"
-MAC_TARGZ="$(ls -t "${BUNDLE_DIR}"/macos/"Marie Lookup.app.tar.gz" | head -1)"
+MAC_APP="${BUNDLE_DIR}/macos/Marie Lookup.app"
+
+# Sign with the stable self-signed identity ("Marie Lookup Signing" in the
+# login keychain — one-time setup, see CLAUDE.md). Without this the app is
+# ad-hoc signed and its signature changes EVERY build, which silently
+# invalidates the macOS Accessibility (TCC) grant on each auto-update: the
+# permission is keyed on the certificate, not the path.
+echo ">> codesigning macOS app (stable identity)"
+codesign --force --deep --sign "Marie Lookup Signing" "${MAC_APP}"
+
+# Re-create the updater artifact from the SIGNED app — the bundler tars it
+# before we sign — and minisign the new archive.
+MAC_TARGZ="${BUNDLE_DIR}/macos/Marie Lookup.app.tar.gz"
+tar -czf "${MAC_TARGZ}" -C "${BUNDLE_DIR}/macos" "Marie Lookup.app"
+(cd "${ROOT}" && npx tauri signer sign -f "${UPDATER_KEY}" --password "" "${MAC_TARGZ}")
 MAC_SIG="$(cat "${MAC_TARGZ}.sig")"
 MAC_DMG="${BUNDLE_DIR}/macos/marie-lookup-${VERSION}-macos-arm64.dmg"
 hdiutil create -quiet -volname "Marie Lookup" \
-  -srcfolder "${BUNDLE_DIR}/macos/Marie Lookup.app" \
+  -srcfolder "${MAC_APP}" \
   -ov -format UDZO "${MAC_DMG}"
 
 echo ">> generating latest.json"
