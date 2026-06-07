@@ -230,6 +230,23 @@ fn open_db(path: &std::path::Path) -> rusqlite::Result<Connection> {
         )?;
         conn.pragma_update(None, "user_version", 3)?;
     }
+    if version < 4 {
+        // Soft deletion: `delete_entry` stamps deleted_at instead of removing
+        // the row; trashed entries are restorable from the Manage window and
+        // hard-purged (history included) after 90 days by the sweep below.
+        conn.execute_batch("ALTER TABLE entries ADD COLUMN deleted_at INTEGER;")?;
+        conn.pragma_update(None, "user_version", 4)?;
+    }
+
+    // Empty the trash for real after 90 days, history included. Runs on
+    // every launch (open_db is called once at setup).
+    conn.execute_batch(
+        "DELETE FROM entry_versions WHERE entry_id IN
+           (SELECT id FROM entries WHERE deleted_at IS NOT NULL
+              AND deleted_at < strftime('%s','now') - 90*86400);
+         DELETE FROM entries WHERE deleted_at IS NOT NULL
+           AND deleted_at < strftime('%s','now') - 90*86400;",
+    )?;
     Ok(conn)
 }
 
@@ -333,8 +350,10 @@ fn schedule_backup(app: &tauri::AppHandle) {
 #[tauri::command]
 fn list_entries(db: tauri::State<Db>) -> Result<Vec<Entry>, AppError> {
     let conn = db.0.lock()?;
-    let mut stmt =
-        conn.prepare("SELECT id, title, body, updated_at FROM entries ORDER BY updated_at DESC")?;
+    let mut stmt = conn.prepare(
+        "SELECT id, title, body, updated_at FROM entries
+         WHERE deleted_at IS NULL ORDER BY updated_at DESC",
+    )?;
     let entries = stmt
         .query_map([], row_to_entry)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -360,7 +379,8 @@ fn search_entries(db: tauri::State<Db>, query: String) -> Result<Vec<Entry>, App
     let conn = db.0.lock()?;
     let mut stmt = conn.prepare(
         "SELECT id, title, body, updated_at FROM entries \
-         WHERE title LIKE ?1 ESCAPE '\\' OR body LIKE ?1 ESCAPE '\\' \
+         WHERE deleted_at IS NULL \
+           AND (title LIKE ?1 ESCAPE '\\' OR body LIKE ?1 ESCAPE '\\') \
          ORDER BY (title LIKE ?1 ESCAPE '\\') DESC, updated_at DESC \
          LIMIT 20",
     )?;
@@ -427,9 +447,54 @@ fn update_entry(
 fn delete_entry(app: tauri::AppHandle, db: tauri::State<Db>, id: i64) -> Result<(), AppError> {
     {
         let conn = db.0.lock()?;
-        conn.execute("DELETE FROM entries WHERE id=?1", params![id])?;
-        // No FK cascade (foreign_keys pragma is off) — clean up history here.
-        conn.execute("DELETE FROM entry_versions WHERE entry_id=?1", params![id])?;
+        // Soft delete: restorable from the Manage window's "Deleted" section.
+        // History stays (needed if the entry is restored); the 90-day purge in
+        // open_db removes both for real.
+        conn.execute(
+            "UPDATE entries SET deleted_at=strftime('%s','now') WHERE id=?1",
+            params![id],
+        )?;
+    }
+    schedule_backup(&app);
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct TrashedEntry {
+    id: i64,
+    title: String,
+    body: String,
+    /// When the entry was moved to the trash (epoch seconds).
+    deleted_at: i64,
+}
+
+/// Soft-deleted entries, newest deletion first. Excluded from lookup search
+/// and the live list; hard-purged with their history after 90 days.
+#[tauri::command]
+fn list_trash(db: tauri::State<Db>) -> Result<Vec<TrashedEntry>, AppError> {
+    let conn = db.0.lock()?;
+    let mut stmt = conn.prepare(
+        "SELECT id, title, body, deleted_at FROM entries
+         WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC",
+    )?;
+    let items = stmt
+        .query_map([], |r| {
+            Ok(TrashedEntry {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                body: r.get(2)?,
+                deleted_at: r.get(3)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(items)
+}
+
+#[tauri::command]
+fn restore_entry(app: tauri::AppHandle, db: tauri::State<Db>, id: i64) -> Result<(), AppError> {
+    {
+        let conn = db.0.lock()?;
+        conn.execute("UPDATE entries SET deleted_at=NULL WHERE id=?1", params![id])?;
     }
     schedule_backup(&app);
     Ok(())
@@ -555,7 +620,8 @@ fn restore_backup(
             }
             // Pre-v3 backups have no entry_versions table; in that case the
             // local history is cleared (it would describe entries that no
-            // longer match) instead of copied.
+            // longer match) instead of copied. Pre-v4 backups have no
+            // deleted_at column — their entries restore as live.
             let bak_has_versions: i64 = conn.query_row(
                 "SELECT count(*) FROM bak.sqlite_master WHERE type='table' AND name='entry_versions'",
                 [],
@@ -567,11 +633,22 @@ fn restore_backup(
             } else {
                 ""
             };
+            let bak_has_deleted: i64 = conn.query_row(
+                "SELECT count(*) FROM bak.pragma_table_info('entries') WHERE name='deleted_at'",
+                [],
+                |r| r.get(0),
+            )?;
+            let copy_entries = if bak_has_deleted > 0 {
+                "INSERT INTO main.entries (id, title, body, created_at, updated_at, deleted_at)
+                   SELECT id, title, body, created_at, updated_at, deleted_at FROM bak.entries;"
+            } else {
+                "INSERT INTO main.entries (id, title, body, created_at, updated_at)
+                   SELECT id, title, body, created_at, updated_at FROM bak.entries;"
+            };
             conn.execute_batch(&format!(
                 "BEGIN;
                  DELETE FROM main.entries;
-                 INSERT INTO main.entries (id, title, body, created_at, updated_at)
-                   SELECT id, title, body, created_at, updated_at FROM bak.entries;
+                 {copy_entries}
                  DELETE FROM main.entry_versions;
                  {copy_versions}
                  COMMIT;"
@@ -1042,6 +1119,8 @@ pub fn run() {
             set_backup_dir,
             restore_backup,
             list_versions,
+            list_trash,
+            restore_entry,
             open_releases_page,
         ])
         .on_window_event(|window, event| {

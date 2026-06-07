@@ -12,6 +12,10 @@
         <input id="filter" type="text" placeholder="Filter…" />
       </div>
       <div id="list" class="sidebar-list"></div>
+      <div id="trash-section" class="trash-section hidden">
+        <button id="trash-toggle">Deleted ▸</button>
+        <div id="trash-list" class="trash-list hidden"></div>
+      </div>
       <div class="sidebar-foot">
         <label>
           <input type="checkbox" id="autostart" />
@@ -34,6 +38,8 @@
       <div class="editor-head">
         <input id="title" class="title" type="text" placeholder="Title" />
         <button id="history-btn" title="View previous versions of this entry">↺</button>
+        <button id="delete-btn" class="danger" title="Move to Deleted (restorable for 90 days)">🗑</button>
+        <button id="restore-btn" class="primary" title="Restore this entry from Deleted">Restore</button>
         <button id="save-btn" class="primary">Save</button>
       </div>
       <div id="history-bar" class="history-bar hidden">
@@ -45,9 +51,6 @@
         </span>
       </div>
       <textarea id="body" class="body" placeholder="Body…"></textarea>
-      <div class="editor-actions">
-        <button id="delete-btn" class="danger">Delete</button>
-      </div>
     </main>
     <script src="manage.js"></script>
   </body>

@@ -295,7 +295,8 @@ body.manage {
   flex: 1;
   overflow-y: auto;
 }
-.sidebar-list .item {
+.sidebar-list .item,
+.trash-list .item {
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
   cursor: pointer;
@@ -305,22 +306,28 @@ body.manage {
   justify-content: space-between;
   gap: 8px;
 }
-.sidebar-list .item .item-title {
+.sidebar-list .item .item-title,
+.trash-list .item .item-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.sidebar-list .item .item-date {
+.sidebar-list .item .item-date,
+.trash-list .item .item-date {
   font-size: 10px;
   color: var(--fg-dim);
   flex-shrink: 0;
 }
-.sidebar-list .item.active .item-date { color: rgba(255, 255, 255, 0.85); }
-.sidebar-list .item:hover { background: rgba(127,127,127,0.08); }
-.sidebar-list .item.active {
+.sidebar-list .item.active .item-date,
+.trash-list .item.active .item-date { color: rgba(255, 255, 255, 0.85); }
+.sidebar-list .item:hover,
+.trash-list .item:hover { background: rgba(127,127,127,0.08); }
+.sidebar-list .item.active,
+.trash-list .item.active {
   background: var(--accent);
   color: white;
 }
+.trash-list .item.active .item-title { color: white; }
 .sidebar-list .empty {
   padding: 20px;
   text-align: center;
@@ -403,6 +410,11 @@ body.manage {
   background: var(--accent);
   border-color: var(--accent);
   color: white;
+}
+.editor-head button.danger {
+  background: transparent;
+  border-color: var(--danger);
+  color: var(--danger);
 }
 .editor-head button:disabled {
   opacity: 0.4;
@@ -499,18 +511,40 @@ body.manage .hidden { display: none; }
 }
 
 /* Editor visibility. The editor shows a placeholder until an entry is selected
-   or a new one is started; toggling `editing` on <body> swaps placeholder ↔
-   fields, and `has-selection` reveals Delete + the history button (only
-   existing entries have either). Replaces per-element style.display toggling
-   in manage.js. */
+   or a new one is started; `editing` on <body> swaps placeholder ↔ fields,
+   `has-selection` reveals 🗑 + history (only existing entries have either),
+   and `trash-view` switches the header to read-only + Restore. */
 .editor .editor-head,
-.editor .body,
-.editor .editor-actions { display: none; }
+.editor .body { display: none; }
 .editing .editor .editor-placeholder { display: none; }
 .editing .editor .editor-head { display: flex; }
 .editing .editor .body { display: block; }
-.editing .editor .editor-actions { display: flex; }
 #delete-btn { display: none; }
 .has-selection #delete-btn { display: inline-block; }
 #history-btn { display: none; }
 .has-selection #history-btn { display: inline-block; }
+#restore-btn { display: none; }
+.trash-view #restore-btn { display: inline-block; }
+.trash-view #save-btn,
+.trash-view #delete-btn,
+.trash-view #history-btn { display: none; }
+
+/* ---------- Deleted (trash) section ---------- */
+.trash-section {
+  border-top: 1px solid var(--border);
+}
+#trash-toggle {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--fg-dim);
+  padding: 10px 12px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.trash-list {
+  max-height: 30vh;
+  overflow-y: auto;
+}
+.trash-list .item .item-title { color: var(--fg-dim); }

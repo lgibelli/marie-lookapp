@@ -20,6 +20,16 @@ async function refresh() {
     entries = [];
   }
   renderList();
+  await refreshTrash();
+}
+
+// True when there are edits that would be lost by leaving the current
+// entry. Save's disabled state is the single source of truth: enabled ⇔
+// the fields differ from what was loaded (history/trash views always have
+// it disabled).
+function confirmDiscard() {
+  if ($saveBtn.disabled) return true;
+  return confirm("You have unsaved changes. Exit without saving?");
 }
 
 function renderList() {
@@ -71,7 +81,7 @@ let loadedTitle = "";
 let loadedBody = "";
 
 function updateSaveState() {
-  if (!isEditing() || inHistory()) {
+  if (!isEditing() || inHistory() || viewingTrash()) {
     $saveBtn.disabled = true;
     return;
   }
@@ -85,7 +95,11 @@ function updateSaveState() {
 function selectEntry(id) {
   const e = entries.find((x) => x.id === id);
   if (!e) return;
+  // Clicking the entry that's already open must not reload (= wipe) edits.
+  if (id === selectedId && !inHistory() && !viewingTrash()) return;
+  if (!confirmDiscard()) return;
   exitHistory();
+  leaveTrashView();
   selectedId = id;
   $title.value = e.title;
   $body.value = e.body;
@@ -97,7 +111,9 @@ function selectEntry(id) {
 }
 
 function newEntry() {
+  if (!confirmDiscard()) return;
   exitHistory();
+  leaveTrashView();
   selectedId = null;
   $title.value = "";
   $body.value = "";
@@ -132,7 +148,7 @@ async function save() {
 
 async function del() {
   if (selectedId == null) return;
-  if (!confirm("Delete this entry?")) return;
+  if (!confirm("Move this entry to Deleted? It can be restored for 90 days.")) return;
   try {
     await invoke("delete_entry", { id: selectedId });
     selectedId = null;
@@ -143,6 +159,104 @@ async function del() {
     alert("Delete failed: " + e);
   }
 }
+
+// ---- Deleted (trash) section -------------------------------------------------
+// Soft-deleted entries live here for 90 days (then the backend purges them,
+// history included). Clicking one opens it read-only with a Restore button.
+
+const $trashSection = document.getElementById("trash-section");
+const $trashToggle = document.getElementById("trash-toggle");
+const $trashList = document.getElementById("trash-list");
+const $restoreBtn = document.getElementById("restore-btn");
+
+let trash = [];
+let trashOpen = false;
+let trashViewId = null;
+
+function viewingTrash() {
+  return trashViewId != null;
+}
+
+function leaveTrashView() {
+  if (!viewingTrash()) return;
+  trashViewId = null;
+  document.body.classList.remove("trash-view");
+  $title.readOnly = false;
+  $body.readOnly = false;
+  renderTrashList();
+}
+
+async function refreshTrash() {
+  try {
+    trash = await invoke("list_trash");
+  } catch (e) {
+    console.error("list_trash failed", e);
+    trash = [];
+  }
+  $trashSection.classList.toggle("hidden", trash.length === 0);
+  $trashToggle.textContent = `Deleted (${trash.length}) ${trashOpen ? "▾" : "▸"}`;
+  renderTrashList();
+}
+
+function renderTrashList() {
+  $trashList.classList.toggle("hidden", !trashOpen);
+  $trashList.replaceChildren();
+  if (!trashOpen) return;
+  for (const t of trash) {
+    const div = document.createElement("div");
+    div.className = "item" + (t.id === trashViewId ? " active" : "");
+    const title = document.createElement("span");
+    title.className = "item-title";
+    title.textContent = t.title || "(untitled)";
+    const date = document.createElement("span");
+    date.className = "item-date";
+    const d = new Date(t.deleted_at * 1000);
+    date.textContent = d.toLocaleDateString();
+    date.title = "Deleted " + d.toLocaleString();
+    div.append(title, date);
+    div.addEventListener("click", () => selectTrashed(t.id));
+    $trashList.appendChild(div);
+  }
+}
+
+function selectTrashed(id) {
+  const t = trash.find((x) => x.id === id);
+  if (!t) return;
+  if (id === trashViewId) return;
+  if (!confirmDiscard()) return;
+  exitHistory();
+  selectedId = null;
+  trashViewId = id;
+  $title.value = t.title;
+  $body.value = t.body;
+  $title.readOnly = true;
+  $body.readOnly = true;
+  document.body.classList.add("editing", "trash-view");
+  document.body.classList.remove("has-selection");
+  renderList();
+  renderTrashList();
+  updateSaveState();
+}
+
+$trashToggle.addEventListener("click", () => {
+  trashOpen = !trashOpen;
+  $trashToggle.textContent = `Deleted (${trash.length}) ${trashOpen ? "▾" : "▸"}`;
+  renderTrashList();
+});
+
+$restoreBtn.addEventListener("click", async () => {
+  if (!viewingTrash()) return;
+  const id = trashViewId;
+  try {
+    await invoke("restore_entry", { id });
+    leaveTrashView();
+    document.body.classList.remove("editing", "trash-view");
+    await refresh();
+    selectEntry(id);
+  } catch (e) {
+    alert("Restore failed: " + e);
+  }
+});
 
 // ---- Time machine (view-only version history) -------------------------------
 // ↺ next to the title steps into the entry's saved versions (newest previous
@@ -203,6 +317,8 @@ function exitHistory() {
 
 $historyBtn.addEventListener("click", async () => {
   if (selectedId == null || inHistory()) return;
+  // Entering history overwrites the fields with old versions.
+  if (!confirmDiscard()) return;
   let list;
   try {
     list = await invoke("list_versions", { entryId: selectedId });
@@ -253,6 +369,9 @@ document.addEventListener("keydown", (e) => {
     newEntry();
   } else if (e.key === "Escape" && inHistory()) {
     exitHistory();
+  } else if (e.key === "Escape" && viewingTrash()) {
+    leaveTrashView();
+    document.body.classList.remove("editing", "trash-view");
   }
 });
 
@@ -359,8 +478,10 @@ $backupRestore.addEventListener("click", async () => {
     await invoke("backup_now");
     const n = await invoke("restore_backup", { path: file });
     alert(`Restored ${n} entr${n === 1 ? "y" : "ies"}.`);
+    exitHistory();
+    leaveTrashView();
     selectedId = null;
-    document.body.classList.remove("editing", "has-selection");
+    document.body.classList.remove("editing", "has-selection", "trash-view");
     await refresh();
     await refreshBackups();
   } catch (e) {
