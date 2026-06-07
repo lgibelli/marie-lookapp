@@ -1,6 +1,6 @@
 [package]
 name = "marie-lookup"
-version = "2.0.0-pre7"
+version = "2.0.0-pre8"
 description = "Tray-resident text snippet lookup with paste-at-cursor"
 edition = "2021"
 license = "AGPL-3.0-or-later"
@@ -27,6 +27,7 @@ tokio = { version = "1", features = ["time"] }
 # macOS — nothing to cross-compile.
 tauri-plugin-updater = { version = "2.10.1", default-features = false, features = ["native-tls", "zip"] }
 serde_json = "1.0.150"
+tauri-plugin-dialog = "2.7.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 macos-accessibility-client = "0.0.1"

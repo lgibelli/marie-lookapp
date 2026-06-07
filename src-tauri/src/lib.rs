@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use rusqlite::{params, Connection};
@@ -6,7 +6,7 @@ use serde::Serialize;
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::TrayIconBuilder,
-    Manager,
+    Emitter, Manager,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -44,6 +44,10 @@ struct AppState {
     /// user hasn't recorded a free combo yet. Written at setup and by
     /// `set_hotkey`; read by `get_hotkey` (the startup window's recorder UI).
     hotkey: Mutex<Option<String>>,
+    /// Debounce generation for auto-backups: every mutation bumps it and
+    /// schedules a snapshot 60s out; the snapshot only runs if no newer
+    /// mutation has bumped the counter since (bursts → one backup).
+    backup_gen: AtomicU64,
     /// HWND of the window that was foreground before the lookup window stole
     /// focus (0 = none captured yet). `paste_text` hands focus back to it via
     /// SetForegroundWindow before synthesizing Ctrl+V — merely hiding our
@@ -122,6 +126,12 @@ impl From<tauri::Error> for AppError {
     }
 }
 
+impl From<std::io::Error> for AppError {
+    fn from(e: std::io::Error) -> Self {
+        AppError(e.to_string())
+    }
+}
+
 #[derive(Serialize, Clone)]
 pub struct Entry {
     pub id: i64,
@@ -179,8 +189,8 @@ fn open_db(path: &std::path::Path) -> rusqlite::Result<Connection> {
         conn.pragma_update(None, "user_version", 1)?;
     }
     if version < 2 {
-        // Key/value app settings. Currently only "hotkey" (the user-chosen
-        // global hotkey in global_hotkey accelerator syntax).
+        // Key/value app settings: "hotkey" (global hotkey accelerator string)
+        // and "backup_dir" (user-chosen backup folder override).
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
@@ -190,6 +200,103 @@ fn open_db(path: &std::path::Path) -> rusqlite::Result<Connection> {
         conn.pragma_update(None, "user_version", 2)?;
     }
     Ok(conn)
+}
+
+fn setting(conn: &Connection, key: &str) -> Option<String> {
+    conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+        r.get(0)
+    })
+    .ok()
+}
+
+fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+// ---- Backups ---------------------------------------------------------------
+// Versioned snapshots of the DB so the entries can't be lost to a dead disk,
+// a botched reinstall or a fat-fingered delete. Snapshots are taken with
+// VACUUM INTO — safe while the app runs (WAL included), produces a compact
+// standalone .db. Triggered debounced after every mutation, on startup when
+// the newest snapshot is older than a day, and manually from the Manage
+// window. Pointing backup_dir at a OneDrive/iCloud-synced folder makes the
+// backups off-site for free.
+
+const BACKUP_KEEP: usize = 30;
+
+/// User-chosen backup folder, or `<app_data_dir>/backups`. Created on demand.
+fn backup_dir(app: &tauri::AppHandle, conn: &Connection) -> std::path::PathBuf {
+    let dir = setting(conn, "backup_dir")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            app.path()
+                .app_data_dir()
+                .expect("app_data_dir")
+                .join("backups")
+        });
+    std::fs::create_dir_all(&dir).ok();
+    dir
+}
+
+/// Backups in `dir`, newest first (the timestamped names sort lexically).
+fn list_backup_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut files: Vec<_> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with("marie-lookup-") && n.ends_with(".db"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    files.sort();
+    files.reverse();
+    files
+}
+
+/// Snapshot the live DB into the backup dir, then prune to BACKUP_KEEP.
+fn do_backup(app: &tauri::AppHandle) -> Result<std::path::PathBuf, AppError> {
+    let db = app.state::<Db>();
+    let conn = db.0.lock()?;
+    let dir = backup_dir(app, &conn);
+    let stamp: String =
+        conn.query_row("SELECT strftime('%Y%m%d-%H%M%S','now')", [], |r| r.get(0))?;
+    let path = dir.join(format!("marie-lookup-{stamp}.db"));
+    // VACUUM INTO refuses to overwrite; drop a same-second leftover first.
+    if path.exists() {
+        std::fs::remove_file(&path)?;
+    }
+    conn.execute("VACUUM INTO ?1", params![path.to_string_lossy()])?;
+    drop(conn);
+    for old in list_backup_files(&dir).into_iter().skip(BACKUP_KEEP) {
+        let _ = std::fs::remove_file(old);
+    }
+    Ok(path)
+}
+
+/// Debounced auto-backup: runs 60s after the latest mutation unless a newer
+/// mutation superseded it. See AppState::backup_gen.
+fn schedule_backup(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let gen = state.backup_gen.fetch_add(1, Ordering::SeqCst) + 1;
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        if app.state::<AppState>().backup_gen.load(Ordering::SeqCst) != gen {
+            return;
+        }
+        if let Err(e) = do_backup(&app) {
+            eprintln!("auto-backup failed: {e}");
+        }
+    });
 }
 
 #[tauri::command]
@@ -232,35 +339,158 @@ fn search_entries(db: tauri::State<Db>, query: String) -> Result<Vec<Entry>, App
 }
 
 #[tauri::command]
-fn add_entry(db: tauri::State<Db>, title: String, body: String) -> Result<i64, AppError> {
-    let conn = db.0.lock()?;
-    conn.execute(
-        "INSERT INTO entries (title, body) VALUES (?1, ?2)",
-        params![title, body],
-    )?;
-    Ok(conn.last_insert_rowid())
+fn add_entry(
+    app: tauri::AppHandle,
+    db: tauri::State<Db>,
+    title: String,
+    body: String,
+) -> Result<i64, AppError> {
+    let id = {
+        let conn = db.0.lock()?;
+        conn.execute(
+            "INSERT INTO entries (title, body) VALUES (?1, ?2)",
+            params![title, body],
+        )?;
+        conn.last_insert_rowid()
+    };
+    schedule_backup(&app);
+    Ok(id)
 }
 
 #[tauri::command]
 fn update_entry(
+    app: tauri::AppHandle,
     db: tauri::State<Db>,
     id: i64,
     title: String,
     body: String,
 ) -> Result<(), AppError> {
-    let conn = db.0.lock()?;
-    conn.execute(
-        "UPDATE entries SET title=?1, body=?2, updated_at=strftime('%s','now') WHERE id=?3",
-        params![title, body, id],
-    )?;
+    {
+        let conn = db.0.lock()?;
+        conn.execute(
+            "UPDATE entries SET title=?1, body=?2, updated_at=strftime('%s','now') WHERE id=?3",
+            params![title, body, id],
+        )?;
+    }
+    schedule_backup(&app);
     Ok(())
 }
 
 #[tauri::command]
-fn delete_entry(db: tauri::State<Db>, id: i64) -> Result<(), AppError> {
-    let conn = db.0.lock()?;
-    conn.execute("DELETE FROM entries WHERE id=?1", params![id])?;
+fn delete_entry(app: tauri::AppHandle, db: tauri::State<Db>, id: i64) -> Result<(), AppError> {
+    {
+        let conn = db.0.lock()?;
+        conn.execute("DELETE FROM entries WHERE id=?1", params![id])?;
+    }
+    schedule_backup(&app);
     Ok(())
+}
+
+#[derive(Serialize)]
+struct BackupFile {
+    name: String,
+    path: String,
+    size: u64,
+    /// Unix epoch seconds of the file's mtime.
+    modified: i64,
+}
+
+#[derive(Serialize)]
+struct BackupInfo {
+    dir: String,
+    backups: Vec<BackupFile>,
+}
+
+#[tauri::command]
+fn backup_info(app: tauri::AppHandle, db: tauri::State<Db>) -> Result<BackupInfo, AppError> {
+    let dir = {
+        let conn = db.0.lock()?;
+        backup_dir(&app, &conn)
+    };
+    let backups = list_backup_files(&dir)
+        .into_iter()
+        .filter_map(|p| {
+            let meta = std::fs::metadata(&p).ok()?;
+            let modified = meta
+                .modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_secs() as i64;
+            Some(BackupFile {
+                name: p.file_name()?.to_string_lossy().into_owned(),
+                path: p.display().to_string(),
+                size: meta.len(),
+                modified,
+            })
+        })
+        .collect();
+    Ok(BackupInfo {
+        dir: dir.display().to_string(),
+        backups,
+    })
+}
+
+#[tauri::command]
+fn backup_now(app: tauri::AppHandle) -> Result<String, AppError> {
+    Ok(do_backup(&app)?.display().to_string())
+}
+
+/// Persist a new backup folder and immediately snapshot into it, so an
+/// unwritable location fails loudly here instead of silently at 3am.
+#[tauri::command]
+fn set_backup_dir(
+    app: tauri::AppHandle,
+    db: tauri::State<Db>,
+    dir: String,
+) -> Result<(), AppError> {
+    {
+        let conn = db.0.lock()?;
+        set_setting(&conn, "backup_dir", &dir)?;
+    }
+    do_backup(&app)?;
+    Ok(())
+}
+
+/// Replace all entries with the ones in the given backup file. Settings are
+/// deliberately untouched (hotkey/backup dir are device-local). Done via
+/// ATTACH inside one transaction so the live connection never closes.
+#[tauri::command]
+fn restore_backup(
+    app: tauri::AppHandle,
+    db: tauri::State<Db>,
+    path: String,
+) -> Result<i64, AppError> {
+    let count = {
+        let conn = db.0.lock()?;
+        conn.execute("ATTACH DATABASE ?1 AS bak", params![path])?;
+        let result = (|| -> Result<i64, AppError> {
+            let has_entries: i64 = conn.query_row(
+                "SELECT count(*) FROM bak.sqlite_master WHERE type='table' AND name='entries'",
+                [],
+                |r| r.get(0),
+            )?;
+            if has_entries == 0 {
+                return Err("not a Marie Lookup backup (no entries table)".into());
+            }
+            conn.execute_batch(
+                "BEGIN;
+                 DELETE FROM main.entries;
+                 INSERT INTO main.entries (id, title, body, created_at, updated_at)
+                   SELECT id, title, body, created_at, updated_at FROM bak.entries;
+                 COMMIT;",
+            )?;
+            Ok(conn.query_row("SELECT count(*) FROM main.entries", [], |r| r.get(0))?)
+        })();
+        if result.is_err() {
+            let _ = conn.execute_batch("ROLLBACK;");
+        }
+        let _ = conn.execute("DETACH DATABASE bak", []);
+        result?
+    };
+    // Snapshot the restored state too — a restore is a mutation like any other.
+    schedule_backup(&app);
+    Ok(count)
 }
 
 #[cfg(target_os = "macos")]
@@ -439,11 +669,8 @@ fn set_hotkey(
         let _ = app.global_shortcut().unregister(old.as_str());
     }
     *current = Some(hotkey.clone());
-    db.0.lock()?.execute(
-        "INSERT INTO settings (key, value) VALUES ('hotkey', ?1)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        params![hotkey],
-    )?;
+    let conn = db.0.lock()?;
+    set_setting(&conn, "hotkey", &hotkey)?;
     Ok(())
 }
 
@@ -507,6 +734,8 @@ pub fn run() {
         // Only Windows artifacts are published for now — on macOS check()
         // errors with "no matching platform" and the frontend ignores it.
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Native folder/file pickers for the backup UI in the Manage window.
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // DB + shared state. Manage AppState before the tray/hotkey are wired
             // up so any handler that reads it always finds it.
@@ -514,18 +743,42 @@ pub fn run() {
             let conn = open_db(&path).expect("open db");
             // The user-chosen hotkey must be known before any webview JS runs,
             // so read it straight off the fresh connection here.
-            let stored_hotkey: Option<String> = conn
-                .query_row("SELECT value FROM settings WHERE key = 'hotkey'", [], |r| {
-                    r.get(0)
-                })
-                .ok();
+            let stored_hotkey = setting(&conn, "hotkey");
             app.manage(Db(Mutex::new(conn)));
             app.manage(AppState {
                 is_pasting: AtomicBool::new(false),
                 hotkey: Mutex::new(None),
+                backup_gen: AtomicU64::new(0),
                 #[cfg(target_os = "windows")]
                 prev_foreground: std::sync::atomic::AtomicIsize::new(0),
             });
+
+            // Safety-net backup: if the newest snapshot is older than a day
+            // (or none exists), take one shortly after startup. Delayed a bit
+            // so it never competes with launch work.
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+                    let stale = {
+                        let db = app_handle.state::<Db>();
+                        let Ok(conn) = db.0.lock() else { return };
+                        let dir = backup_dir(&app_handle, &conn);
+                        list_backup_files(&dir).first().map_or(true, |newest| {
+                            std::fs::metadata(newest)
+                                .and_then(|m| m.modified())
+                                .ok()
+                                .and_then(|t| t.elapsed().ok())
+                                .is_none_or(|age| age.as_secs() > 24 * 60 * 60)
+                        })
+                    };
+                    if stale {
+                        if let Err(e) = do_backup(&app_handle) {
+                            eprintln!("startup backup failed: {e}");
+                        }
+                    }
+                });
+            }
 
             // Register the global hotkey: the stored custom combo if any, else
             // DEFAULT_HOTKEY. Non-fatal — if every candidate is owned by another
@@ -570,11 +823,13 @@ pub fn run() {
                     .or_else(|_| MenuItemBuilder::with_id("show", "Lookup…").build(app))?
             };
             let manage_item = MenuItemBuilder::with_id("manage", "Manage entries…").build(app)?;
+            let check_item =
+                MenuItemBuilder::with_id("check-updates", "Check for updates…").build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "Quit")
                 .accelerator("CmdOrCtrl+Q")
                 .build(app)?;
             let menu = MenuBuilder::new(app)
-                .items(&[&show_item, &manage_item])
+                .items(&[&show_item, &manage_item, &check_item])
                 .separator()
                 .item(&quit_item)
                 .build()?;
@@ -586,6 +841,12 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => show_lookup(app),
                     "manage" => show_manage(app),
+                    // The update flow lives in the startup window's JS
+                    // (dist/startup.js) — poke it to check right now,
+                    // bypassing the hourly cadence and the daily prompt cap.
+                    "check-updates" => {
+                        let _ = app.emit_to("startup", "check-updates", ());
+                    }
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -633,6 +894,10 @@ pub fn run() {
             open_accessibility_settings,
             get_hotkey,
             set_hotkey,
+            backup_info,
+            backup_now,
+            set_backup_dir,
+            restore_backup,
         ])
         .on_window_event(|window, event| {
             // Keep the app running when the manage window is closed:

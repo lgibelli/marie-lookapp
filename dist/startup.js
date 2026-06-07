@@ -210,6 +210,24 @@ async function maybePromptUpdate() {
   await win.show();
 }
 
+// Tray menu "Check for updates…" — an explicit user action, so it bypasses
+// both the hourly cadence and the daily prompt cap, and always reports the
+// outcome (including "up to date", which background checks never show).
+window.__TAURI__.event.listen("check-updates", async () => {
+  await win.show();
+  setStatus("Checking for updates…", true);
+  const found = await checkForUpdate();
+  if (found) {
+    setStatus("", true);
+    localStorage.setItem(
+      UPDATE_PROMPT_KEY,
+      JSON.stringify({ version: pendingUpdate.version, ts: Date.now() })
+    );
+  } else {
+    setStatus("You're running the latest version.", true);
+  }
+});
+
 $updateLater.addEventListener("click", () => {
   $updateRow.classList.add("hidden");
 });

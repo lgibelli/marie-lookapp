@@ -148,5 +148,95 @@ $autostart.addEventListener("change", async () => {
   }
 });
 
+// ---- Backups ---------------------------------------------------------------
+// Rust takes versioned snapshots automatically (debounced after every change
+// + a daily safety net); this block is status display, manual backup, backup
+// folder choice and restore. Point the folder at OneDrive/iCloud for off-site
+// copies.
+
+const $backupStatus = document.getElementById("backup-status");
+const $backupNow = document.getElementById("backup-now");
+const $backupFolder = document.getElementById("backup-folder");
+const $backupRestore = document.getElementById("backup-restore");
+
+let backupDir = null;
+
+async function refreshBackups() {
+  try {
+    const info = await invoke("backup_info");
+    backupDir = info.dir;
+    if (info.backups.length) {
+      const latest = new Date(info.backups[0].modified * 1000);
+      $backupStatus.textContent =
+        `${info.backups.length} backup${info.backups.length === 1 ? "" : "s"}` +
+        ` · latest ${latest.toLocaleString()}`;
+    } else {
+      $backupStatus.textContent = "No backups yet";
+    }
+    $backupStatus.title = info.dir;
+  } catch (e) {
+    console.error("backup_info failed", e);
+    $backupStatus.textContent = "Backups unavailable";
+  }
+}
+
+$backupNow.addEventListener("click", async () => {
+  $backupNow.disabled = true;
+  try {
+    await invoke("backup_now");
+    await refreshBackups();
+  } catch (e) {
+    alert("Backup failed: " + e);
+  } finally {
+    $backupNow.disabled = false;
+  }
+});
+
+$backupFolder.addEventListener("click", async () => {
+  try {
+    const dir = await window.__TAURI__.dialog.open({
+      directory: true,
+      defaultPath: backupDir || undefined,
+      title: "Choose backup folder",
+    });
+    if (!dir) return;
+    await invoke("set_backup_dir", { dir });
+    await refreshBackups();
+  } catch (e) {
+    alert("Couldn't set backup folder: " + e);
+  }
+});
+
+$backupRestore.addEventListener("click", async () => {
+  try {
+    const file = await window.__TAURI__.dialog.open({
+      defaultPath: backupDir || undefined,
+      title: "Choose a backup to restore",
+      filters: [{ name: "Marie Lookup backup", extensions: ["db"] }],
+    });
+    if (!file) return;
+    if (
+      !confirm(
+        "Replace ALL current entries with this backup?\n\n" +
+          file +
+          "\n\n(A snapshot of the current state is taken first, so this can be undone.)"
+      )
+    ) {
+      return;
+    }
+    // Snapshot current state before overwriting it, so a wrong pick is undoable.
+    await invoke("backup_now");
+    const n = await invoke("restore_backup", { path: file });
+    alert(`Restored ${n} entr${n === 1 ? "y" : "ies"}.`);
+    selectedId = null;
+    document.body.classList.remove("editing", "has-selection");
+    await refresh();
+    await refreshBackups();
+  } catch (e) {
+    alert("Restore failed: " + e);
+  }
+});
+
 refresh();
 refreshAutostart();
+refreshBackups();
