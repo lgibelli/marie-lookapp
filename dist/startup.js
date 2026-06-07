@@ -1,0 +1,238 @@
+const { invoke } = window.__TAURI__.core;
+const { getCurrentWindow } = window.__TAURI__.window;
+
+// localStorage persists in the webview profile under the app data dir, so the
+// dismissal survives restarts without touching the SQLite DB.
+const DISMISS_KEY = "startup-notice-dismissed";
+
+const win = getCurrentWindow();
+const isMac = navigator.userAgent.includes("Mac");
+
+const $hotkey = document.getElementById("hotkey");
+const $status = document.getElementById("hotkey-status");
+const $change = document.getElementById("change-hotkey");
+const $recorder = document.getElementById("recorder");
+const $cancel = document.getElementById("cancel-record");
+const $ok = document.getElementById("ok");
+
+document.getElementById("tray-name").textContent = isMac
+  ? "menu bar (top right)"
+  : "system tray (bottom right — check the ^ overflow)";
+
+// Currently active hotkey in canonical accelerator syntax ("Control+Alt+M"),
+// shared with the Rust side (get_hotkey / set_hotkey). null = none registered.
+let active = null;
+
+// "Control+Alt+M" → "Ctrl+Alt+M" (Windows/Linux) or "⌃⌥M" (macOS) for display.
+// "Super" is the canonical Cmd/Win token — the only spelling the Rust-side
+// parsers accept (see DEFAULT_HOTKEY in lib.rs).
+function fmt(combo) {
+  if (!combo) return "—";
+  if (isMac) {
+    return combo
+      .replace("Control", "⌃")
+      .replace("Alt", "⌥")
+      .replace("Shift", "⇧")
+      .replace("Super", "⌘")
+      .replaceAll("+", "");
+  }
+  return combo.replace("Control", "Ctrl").replace("Super", "Win");
+}
+
+function setStatus(text, ok) {
+  $status.textContent = text;
+  $status.classList.toggle("ok", !!ok);
+}
+
+function render() {
+  $hotkey.textContent = fmt(active);
+  // Without a working hotkey the app would be tray-only — keep OK disabled
+  // (and the notice shown) until the user records a free combo.
+  $ok.disabled = !active;
+}
+
+function startRecording() {
+  $change.classList.add("hidden");
+  $recorder.classList.remove("hidden");
+  $cancel.classList.remove("hidden");
+  $recorder.value = "";
+  $recorder.focus();
+}
+
+function stopRecording() {
+  $recorder.classList.add("hidden");
+  $cancel.classList.add("hidden");
+  $change.classList.remove("hidden");
+}
+
+// Map a keydown to canonical accelerator syntax, or null while only modifiers
+// are held. Letters / digits / F-keys only — those parse reliably on the Rust
+// side (global_hotkey), and anything more exotic is a footgun as a global key.
+function comboFromEvent(e) {
+  let key = null;
+  if (/^Key[A-Z]$/.test(e.code)) key = e.code.slice(3);
+  else if (/^Digit[0-9]$/.test(e.code)) key = e.code.slice(5);
+  else if (/^F([1-9]|1[0-9]|2[0-4])$/.test(e.code)) key = e.code;
+  if (!key) return null;
+  const mods = [];
+  if (e.ctrlKey) mods.push("Control");
+  if (e.altKey) mods.push("Alt");
+  if (e.shiftKey) mods.push("Shift");
+  if (e.metaKey) mods.push("Super");
+  return {
+    combo: [...mods, key].join("+"),
+    // Shift alone can't gate a global key (it would eat capital letters
+    // everywhere); F-keys are fine bare.
+    usable: e.ctrlKey || e.altKey || e.metaKey || key.length > 1,
+  };
+}
+
+$recorder.addEventListener("keydown", async (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.code === "Escape") {
+    stopRecording();
+    render();
+    return;
+  }
+  const rec = comboFromEvent(e);
+  if (!rec) {
+    // Modifiers only so far — live preview.
+    const mods = [];
+    if (e.ctrlKey) mods.push("Control");
+    if (e.altKey) mods.push("Alt");
+    if (e.shiftKey) mods.push("Shift");
+    if (e.metaKey) mods.push("Super");
+    $recorder.value = mods.length ? fmt(mods.join("+")) + "+…" : "";
+    return;
+  }
+  if (!rec.usable) {
+    setStatus(
+      `Add ${isMac ? "⌃, ⌥ or ⌘" : "Ctrl, Alt or Win"} — a bare key would fire while you type.`,
+      false
+    );
+    return;
+  }
+  $recorder.value = fmt(rec.combo);
+  try {
+    await invoke("set_hotkey", { hotkey: rec.combo });
+    active = rec.combo;
+    stopRecording();
+    setStatus(`Hotkey saved: ${fmt(rec.combo)}`, true);
+    render();
+  } catch (_err) {
+    setStatus(
+      `${fmt(rec.combo)} is taken by another app — try a different combo.`,
+      false
+    );
+  }
+});
+
+// Clicking away cancels recording; Cancel is just a visible way to do it.
+$recorder.addEventListener("blur", () => {
+  stopRecording();
+  render();
+});
+$cancel.addEventListener("click", stopRecording);
+$change.addEventListener("click", startRecording);
+
+$ok.addEventListener("click", async () => {
+  if (document.getElementById("dont-show").checked) {
+    localStorage.setItem(DISMISS_KEY, "1");
+  }
+  await win.hide();
+});
+
+// ---- Auto-update (tauri-plugin-updater) -----------------------------------
+// Checks latest.json on the public releases repo at every launch. A found
+// update overrides the "don't show again" dismissal — the window pops up with
+// an Install/Later prompt. Install downloads the signed NSIS installer and
+// runs it silently; on Windows the app exits while the installer runs and the
+// installer relaunches it (see scripts/installer.nsi).
+
+const $updateRow = document.getElementById("update-row");
+const $updateText = document.getElementById("update-text");
+const $updateInstall = document.getElementById("update-install");
+const $updateLater = document.getElementById("update-later");
+
+let pendingUpdate = null;
+
+async function checkForUpdate() {
+  const updater = window.__TAURI__.updater;
+  if (!updater) return false;
+  try {
+    pendingUpdate = await updater.check();
+  } catch (_err) {
+    // Offline, endpoint unreachable, or no artifact for this platform
+    // (macOS for now) — stay quiet, this is a background check.
+    return false;
+  }
+  if (!pendingUpdate) return false;
+  $updateText.textContent =
+    `Version ${pendingUpdate.version} is available ` +
+    `(you have ${pendingUpdate.currentVersion}).`;
+  $updateRow.classList.remove("hidden");
+  return true;
+}
+
+$updateLater.addEventListener("click", () => {
+  $updateRow.classList.add("hidden");
+});
+
+$updateInstall.addEventListener("click", async () => {
+  if (!pendingUpdate) return;
+  $updateInstall.disabled = true;
+  $updateLater.disabled = true;
+  let total = 0;
+  let got = 0;
+  try {
+    await pendingUpdate.downloadAndInstall((ev) => {
+      if (ev.event === "Started") {
+        total = ev.data.contentLength || 0;
+        setStatus("Downloading update…", true);
+      } else if (ev.event === "Progress") {
+        got += ev.data.chunkLength;
+        const pct = total ? ` ${Math.round((got / total) * 100)}%` : "";
+        setStatus(`Downloading update…${pct}`, true);
+      } else if (ev.event === "Finished") {
+        setStatus("Installing update — the app will restart…", true);
+      }
+    });
+    // On Windows the process exits while the installer runs; nothing after
+    // this point is expected to execute.
+  } catch (err) {
+    setStatus(`Update failed: ${err}`, false);
+    $updateInstall.disabled = false;
+    $updateLater.disabled = false;
+  }
+});
+
+async function init() {
+  try {
+    active = await invoke("get_hotkey");
+  } catch (_err) {
+    active = null;
+  }
+  render();
+  if (!active || localStorage.getItem(DISMISS_KEY) !== "1") {
+    await win.show();
+  }
+  if (!active) {
+    // The default combo is owned by another app and the user hasn't picked a
+    // replacement yet — warn and drop straight into recording. After show(),
+    // so the recorder actually receives focus.
+    setStatus(
+      `The default hotkey ${fmt(isMac ? "Super+Alt+M" : "Control+Alt+M")} is ` +
+        "taken by another app. Press a free combo to use instead.",
+      false
+    );
+    startRecording();
+  }
+  // Background update check last — network-bound, must not delay the notice.
+  // A found update forces the window up even when dismissed.
+  if (await checkForUpdate()) {
+    await win.show();
+  }
+}
+
+init();

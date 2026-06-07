@@ -8,7 +8,7 @@ use tauri::{
     tray::TrayIconBuilder,
     Manager,
 };
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 // CONTRACT: this exact error string is matched in dist/lookup.js (search for
 // "accessibility_required"). If you rename it, update lookup.js too — there is
@@ -17,6 +17,18 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 // no-op), so the const is macOS-only.
 #[cfg(target_os = "macos")]
 const ERR_ACCESSIBILITY: &str = "accessibility_required";
+
+/// Default global lookup hotkey in global_hotkey accelerator syntax. M = Marie.
+/// Deliberately not Cmd+Space (Spotlight) or Cmd+Shift+Space (Character
+/// Viewer). The user can override it from the startup window; the override is
+/// persisted in the `settings` table and wins over this at launch.
+/// NB: the Cmd/Win modifier token must be "Super" — that's the only spelling
+/// both global_hotkey (registration) and muda (tray accelerator hint) parse;
+/// "Meta" is rejected by both. dist/startup.js emits the same syntax.
+#[cfg(target_os = "macos")]
+const DEFAULT_HOTKEY: &str = "Super+Alt+M";
+#[cfg(not(target_os = "macos"))]
+const DEFAULT_HOTKEY: &str = "Control+Alt+M";
 
 pub struct Db(pub Mutex<Connection>);
 
@@ -27,6 +39,32 @@ struct AppState {
     /// focus-loss handlers from re-showing/re-hiding the lookup window during
     /// that gap — otherwise the synthesized ⌘V can land in our own search box.
     is_pasting: AtomicBool,
+    /// The currently registered global hotkey in global_hotkey accelerator
+    /// syntax (e.g. "Control+Alt+M"), or None if registration failed and the
+    /// user hasn't recorded a free combo yet. Written at setup and by
+    /// `set_hotkey`; read by `get_hotkey` (the startup window's recorder UI).
+    hotkey: Mutex<Option<String>>,
+    /// HWND of the window that was foreground before the lookup window stole
+    /// focus (0 = none captured yet). `paste_text` hands focus back to it via
+    /// SetForegroundWindow before synthesizing Ctrl+V — merely hiding our
+    /// window leaves activation to Z-order, which is not guaranteed to land
+    /// on the paste target in time (or at all). macOS doesn't need this:
+    /// `app.hide()` in `hide_lookup_window` restores focus properly there.
+    #[cfg(target_os = "windows")]
+    prev_foreground: std::sync::atomic::AtomicIsize,
+}
+
+/// Minimal hand-rolled user32 bindings for the foreground-window bookkeeping
+/// described on `AppState::prev_foreground`. Two stable functions aren't
+/// worth a direct `windows` crate dependency.
+#[cfg(target_os = "windows")]
+mod win_focus {
+    use std::ffi::c_void;
+    #[link(name = "user32")]
+    extern "system" {
+        pub fn GetForegroundWindow() -> *mut c_void;
+        pub fn SetForegroundWindow(hwnd: *mut c_void) -> i32;
+    }
 }
 
 /// Error wrapper so commands can use `?` instead of `.map_err(|e| e.to_string())`
@@ -139,6 +177,17 @@ fn open_db(path: &std::path::Path) -> rusqlite::Result<Connection> {
             DROP INDEX IF EXISTS idx_entries_title;",
         )?;
         conn.pragma_update(None, "user_version", 1)?;
+    }
+    if version < 2 {
+        // Key/value app settings. Currently only "hotkey" (the user-chosen
+        // global hotkey in global_hotkey accelerator syntax).
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );",
+        )?;
+        conn.pragma_update(None, "user_version", 2)?;
     }
     Ok(conn)
 }
@@ -274,6 +323,21 @@ async fn paste_text(app: tauri::AppHandle, text: String) -> Result<(), AppError>
 
     hide_lookup_window(&app);
 
+    // On Windows, hiding alone leaves activation to Z-order and the
+    // synthesized Ctrl+V can land in the wrong window (or nowhere) — hand
+    // focus back to the window captured in show_lookup explicitly. macOS
+    // gets the equivalent via app.hide() inside hide_lookup_window.
+    #[cfg(target_os = "windows")]
+    {
+        let prev = app
+            .state::<AppState>()
+            .prev_foreground
+            .load(Ordering::SeqCst);
+        if prev != 0 && unsafe { win_focus::SetForegroundWindow(prev as *mut _) } == 0 {
+            eprintln!("SetForegroundWindow failed; paste may miss its target");
+        }
+    }
+
     // Give the OS time to transfer focus back to the previous app.
     tokio::time::sleep(std::time::Duration::from_millis(180)).await;
 
@@ -345,6 +409,44 @@ fn open_manage(app: tauri::AppHandle) -> Result<(), AppError> {
     Ok(())
 }
 
+/// The active global hotkey (accelerator syntax, e.g. "Control+Alt+M"), or
+/// None if nothing could be registered. The startup window (dist/startup.js)
+/// displays it and auto-opens its recorder UI when this is None.
+#[tauri::command]
+fn get_hotkey(state: tauri::State<AppState>) -> Result<Option<String>, AppError> {
+    Ok(state.hotkey.lock()?.clone())
+}
+
+/// Register + persist a user-chosen global hotkey (accelerator syntax). The
+/// new combo is registered BEFORE the old one is dropped: if another app owns
+/// it (or the string doesn't parse) this errors and the previous hotkey keeps
+/// working — the startup window's recorder loops until a free combo is found.
+#[tauri::command]
+fn set_hotkey(
+    app: tauri::AppHandle,
+    db: tauri::State<Db>,
+    state: tauri::State<AppState>,
+    hotkey: String,
+) -> Result<(), AppError> {
+    let mut current = state.hotkey.lock()?;
+    if current.as_deref() == Some(hotkey.as_str()) {
+        return Ok(()); // already active — re-registering would fail as a dup
+    }
+    app.global_shortcut()
+        .register(hotkey.as_str())
+        .map_err(|e| format!("could not register {hotkey}: {e}"))?;
+    if let Some(old) = current.take() {
+        let _ = app.global_shortcut().unregister(old.as_str());
+    }
+    *current = Some(hotkey.clone());
+    db.0.lock()?.execute(
+        "INSERT INTO settings (key, value) VALUES ('hotkey', ?1)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![hotkey],
+    )?;
+    Ok(())
+}
+
 /// Show + focus the manage window. Shared by `open_manage` and the tray menu so
 /// both restore a minimized window identically.
 fn show_manage(app: &tauri::AppHandle) {
@@ -363,6 +465,20 @@ fn show_lookup(app: &tauri::AppHandle) {
         return;
     }
     if let Some(w) = app.get_webview_window("lookup") {
+        // Remember who has focus before we steal it, so paste_text can hand
+        // it straight back. Skip when the lookup window itself is foreground
+        // (hotkey pressed while already open) — saving our own handle would
+        // make the paste target ourselves.
+        #[cfg(target_os = "windows")]
+        {
+            let prev = unsafe { win_focus::GetForegroundWindow() } as isize;
+            let ours = w.hwnd().map(|h| h.0 as isize).unwrap_or(0);
+            if prev != 0 && prev != ours {
+                app.state::<AppState>()
+                    .prev_foreground
+                    .store(prev, Ordering::SeqCst);
+            }
+        }
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
@@ -386,21 +502,73 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        // Auto-updates: checks latest.json on the public releases repo; the
+        // startup window drives the ask-then-install flow (dist/startup.js).
+        // Only Windows artifacts are published for now — on macOS check()
+        // errors with "no matching platform" and the frontend ignores it.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // DB + shared state. Manage AppState before the tray/hotkey are wired
             // up so any handler that reads it always finds it.
             let path = db_path(app.handle());
             let conn = open_db(&path).expect("open db");
+            // The user-chosen hotkey must be known before any webview JS runs,
+            // so read it straight off the fresh connection here.
+            let stored_hotkey: Option<String> = conn
+                .query_row("SELECT value FROM settings WHERE key = 'hotkey'", [], |r| {
+                    r.get(0)
+                })
+                .ok();
             app.manage(Db(Mutex::new(conn)));
             app.manage(AppState {
                 is_pasting: AtomicBool::new(false),
+                hotkey: Mutex::new(None),
+                #[cfg(target_os = "windows")]
+                prev_foreground: std::sync::atomic::AtomicIsize::new(0),
             });
 
+            // Register the global hotkey: the stored custom combo if any, else
+            // DEFAULT_HOTKEY. Non-fatal — if every candidate is owned by another
+            // app, keep running (tray + windows still work); the startup window
+            // sees None via `get_hotkey` and opens its recorder UI so the user
+            // can pick a free combo. Propagating with `?` here used to kill the
+            // whole app silently.
+            let mut active_hotkey: Option<String> = None;
+            #[cfg(desktop)]
+            {
+                let mut candidates = Vec::new();
+                if let Some(stored) = stored_hotkey {
+                    candidates.push(stored);
+                }
+                if candidates.first().map(String::as_str) != Some(DEFAULT_HOTKEY) {
+                    candidates.push(DEFAULT_HOTKEY.to_string());
+                }
+                for cand in candidates {
+                    match app.global_shortcut().register(cand.as_str()) {
+                        Ok(()) => {
+                            active_hotkey = Some(cand);
+                            break;
+                        }
+                        Err(e) => eprintln!("global hotkey {cand}: registration failed: {e}"),
+                    }
+                }
+                *app.state::<AppState>().hotkey.lock().unwrap() = active_hotkey.clone();
+            }
+
             // Tray menu. The accelerator on "Lookup…" is purely a visual hint —
-            // the real global hotkey is registered below via the plugin.
-            let show_item = MenuItemBuilder::with_id("show", "Lookup…")
-                .accelerator("CmdOrCtrl+Alt+M")
-                .build(app)?;
+            // it mirrors whatever combo actually registered above (none if
+            // registration failed entirely). muda's accelerator parser is not
+            // identical to global_hotkey's, so if it rejects the combo, fall
+            // back to a hint-less item rather than killing the app.
+            let show_item = {
+                let mut builder = MenuItemBuilder::with_id("show", "Lookup…");
+                if let Some(hk) = &active_hotkey {
+                    builder = builder.accelerator(hk);
+                }
+                builder
+                    .build(app)
+                    .or_else(|_| MenuItemBuilder::with_id("show", "Lookup…").build(app))?
+            };
             let manage_item = MenuItemBuilder::with_id("manage", "Manage entries…").build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "Quit")
                 .accelerator("CmdOrCtrl+Q")
@@ -422,18 +590,6 @@ pub fn run() {
                     _ => {}
                 })
                 .build(app)?;
-
-            // Register the global hotkey: Cmd+Option+M (macOS) / Ctrl+Alt+M (win/linux).
-            // M = Marie. Avoids Cmd+Space (Spotlight) and Cmd+Shift+Space (Character Viewer).
-            #[cfg(desktop)]
-            {
-                #[cfg(target_os = "macos")]
-                let shortcut = Shortcut::new(Some(Modifiers::META | Modifiers::ALT), Code::KeyM);
-                #[cfg(not(target_os = "macos"))]
-                let shortcut =
-                    Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyM);
-                app.global_shortcut().register(shortcut)?;
-            }
 
             // Hide lookup when it loses focus
             if let Some(w) = app.get_webview_window("lookup") {
@@ -475,6 +631,8 @@ pub fn run() {
             hide_lookup,
             open_manage,
             open_accessibility_settings,
+            get_hotkey,
+            set_hotkey,
         ])
         .on_window_event(|window, event| {
             // Keep the app running when the manage window is closed:

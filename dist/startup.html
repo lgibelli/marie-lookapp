@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Marie Lookup</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body class="startup">
+    <h1 class="startup-title">Marie Lookup started</h1>
+    <p class="startup-text">
+      It runs in the <span id="tray-name">system tray</span>.
+      Press <kbd id="hotkey">…</kbd> to open the lookup window.
+    </p>
+    <p id="hotkey-status" class="startup-warning"></p>
+    <div id="update-row" class="startup-update hidden">
+      <span id="update-text"></span>
+      <span class="startup-update-actions">
+        <button id="update-install" class="primary">Install &amp; restart</button>
+        <button id="update-later">Later</button>
+      </span>
+    </div>
+    <div class="startup-hotkey-row">
+      <button id="change-hotkey">Change hotkey…</button>
+      <input
+        id="recorder"
+        type="text"
+        readonly
+        class="hidden"
+        placeholder="Press the new key combo…"
+      />
+      <button id="cancel-record" class="hidden">Cancel</button>
+    </div>
+    <label class="startup-dontshow">
+      <input id="dont-show" type="checkbox" />
+      Don't show this again
+    </label>
+    <div class="startup-actions">
+      <button id="ok" autofocus>OK</button>
+    </div>
+    <script src="startup.js"></script>
+  </body>
+</html>
