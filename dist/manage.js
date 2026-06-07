@@ -1,4 +1,7 @@
 const { invoke } = window.__TAURI__.core;
+// Native dialogs — window.confirm()/alert() are unreliable in WKWebView
+// (silently return undefined on macOS), so never use them here.
+const { ask: dialogAsk, message: dialogMessage } = window.__TAURI__.dialog;
 
 const $autostart = document.getElementById("autostart");
 const $list = document.getElementById("list");
@@ -23,13 +26,22 @@ async function refresh() {
   await refreshTrash();
 }
 
-// True when there are edits that would be lost by leaving the current
-// entry. Save's disabled state is the single source of truth: enabled ⇔
-// the fields differ from what was loaded (history/trash views always have
-// it disabled).
-function confirmDiscard() {
+// Resolves true when it's safe to leave the current entry. With unsaved
+// changes (Save enabled ⇔ fields differ from what was loaded; history/trash
+// views always have it disabled), asks Save / Discard via a native dialog.
+// Choosing Save saves first and only proceeds if the save succeeded.
+async function confirmLeave() {
   if ($saveBtn.disabled) return true;
-  return confirm("You have unsaved changes. Exit without saving?");
+  const wantSave = await dialogAsk("Save changes before leaving this entry?", {
+    title: "Unsaved changes",
+    okLabel: "Save",
+    cancelLabel: "Discard",
+  });
+  if (wantSave) {
+    await save();
+    return $saveBtn.disabled; // still enabled ⇒ save failed ⇒ stay put
+  }
+  return true;
 }
 
 function renderList() {
@@ -92,12 +104,12 @@ function updateSaveState() {
   }
 }
 
-function selectEntry(id) {
+async function selectEntry(id) {
   const e = entries.find((x) => x.id === id);
   if (!e) return;
   // Clicking the entry that's already open must not reload (= wipe) edits.
   if (id === selectedId && !inHistory() && !viewingTrash()) return;
-  if (!confirmDiscard()) return;
+  if (!(await confirmLeave())) return;
   exitHistory();
   leaveTrashView();
   selectedId = id;
@@ -110,8 +122,8 @@ function selectEntry(id) {
   updateSaveState();
 }
 
-function newEntry() {
-  if (!confirmDiscard()) return;
+async function newEntry() {
+  if (!(await confirmLeave())) return;
   exitHistory();
   leaveTrashView();
   selectedId = null;
@@ -148,13 +160,18 @@ async function save() {
     updateSaveState();
   } catch (e) {
     console.error("save failed", e);
-    alert("Save failed: " + e);
+    await dialogMessage("Save failed: " + e, { title: "Marie Lookup", kind: "error" });
   }
 }
 
 async function del() {
   if (selectedId == null) return;
-  if (!confirm("Move this entry to Deleted? It can be restored for 90 days.")) return;
+  const ok = await dialogAsk("Move this entry to Deleted? It can be restored for 90 days.", {
+    title: "Delete entry",
+    okLabel: "Move to Deleted",
+    cancelLabel: "Cancel",
+  });
+  if (!ok) return;
   try {
     await invoke("delete_entry", { id: selectedId });
     selectedId = null;
@@ -162,7 +179,7 @@ async function del() {
     await refresh();
   } catch (e) {
     console.error("delete failed", e);
-    alert("Delete failed: " + e);
+    await dialogMessage("Delete failed: " + e, { title: "Marie Lookup", kind: "error" });
   }
 }
 
@@ -225,11 +242,11 @@ function renderTrashList() {
   }
 }
 
-function selectTrashed(id) {
+async function selectTrashed(id) {
   const t = trash.find((x) => x.id === id);
   if (!t) return;
   if (id === trashViewId) return;
-  if (!confirmDiscard()) return;
+  if (!(await confirmLeave())) return;
   exitHistory();
   selectedId = null;
   trashViewId = id;
@@ -260,7 +277,7 @@ $restoreBtn.addEventListener("click", async () => {
     await refresh();
     selectEntry(id);
   } catch (e) {
-    alert("Restore failed: " + e);
+    await dialogMessage("Restore failed: " + e, { title: "Marie Lookup", kind: "error" });
   }
 });
 
@@ -324,16 +341,19 @@ function exitHistory() {
 $historyBtn.addEventListener("click", async () => {
   if (selectedId == null || inHistory()) return;
   // Entering history overwrites the fields with old versions.
-  if (!confirmDiscard()) return;
+  if (!(await confirmLeave())) return;
   let list;
   try {
     list = await invoke("list_versions", { entryId: selectedId });
   } catch (e) {
-    alert("Couldn't load history: " + e);
+    await dialogMessage("Couldn't load history: " + e, { title: "Marie Lookup", kind: "error" });
     return;
   }
   if (!list.length) {
-    alert("No previous versions of this entry yet — history starts with the next save.");
+    await dialogMessage(
+      "No previous versions of this entry yet — history starts with the next save.",
+      { title: "Marie Lookup" }
+    );
     return;
   }
   versions = list;
@@ -400,7 +420,10 @@ $autostart.addEventListener("change", async () => {
   } catch (e) {
     console.error("autostart toggle failed", e);
     $autostart.checked = !$autostart.checked;
-    alert("Couldn't update launch-at-login setting: " + e);
+    await dialogMessage("Couldn't update launch-at-login setting: " + e, {
+      title: "Marie Lookup",
+      kind: "error",
+    });
   }
 });
 
@@ -442,7 +465,7 @@ $backupNow.addEventListener("click", async () => {
     await invoke("backup_now");
     await refreshBackups();
   } catch (e) {
-    alert("Backup failed: " + e);
+    await dialogMessage("Backup failed: " + e, { title: "Marie Lookup", kind: "error" });
   } finally {
     $backupNow.disabled = false;
   }
@@ -459,7 +482,10 @@ $backupFolder.addEventListener("click", async () => {
     await invoke("set_backup_dir", { dir });
     await refreshBackups();
   } catch (e) {
-    alert("Couldn't set backup folder: " + e);
+    await dialogMessage("Couldn't set backup folder: " + e, {
+      title: "Marie Lookup",
+      kind: "error",
+    });
   }
 });
 
@@ -471,19 +497,19 @@ $backupRestore.addEventListener("click", async () => {
       filters: [{ name: "Marie Lookup backup", extensions: ["db"] }],
     });
     if (!file) return;
-    if (
-      !confirm(
-        "Replace ALL current entries with this backup?\n\n" +
-          file +
-          "\n\n(A snapshot of the current state is taken first, so this can be undone.)"
-      )
-    ) {
-      return;
-    }
+    const ok = await dialogAsk(
+      "Replace ALL current entries with this backup?\n\n" +
+        file +
+        "\n\n(A snapshot of the current state is taken first, so this can be undone.)",
+      { title: "Restore backup", okLabel: "Restore", cancelLabel: "Cancel" }
+    );
+    if (!ok) return;
     // Snapshot current state before overwriting it, so a wrong pick is undoable.
     await invoke("backup_now");
     const n = await invoke("restore_backup", { path: file });
-    alert(`Restored ${n} entr${n === 1 ? "y" : "ies"}.`);
+    await dialogMessage(`Restored ${n} entr${n === 1 ? "y" : "ies"}.`, {
+      title: "Marie Lookup",
+    });
     exitHistory();
     leaveTrashView();
     selectedId = null;
@@ -491,7 +517,7 @@ $backupRestore.addEventListener("click", async () => {
     await refresh();
     await refreshBackups();
   } catch (e) {
-    alert("Restore failed: " + e);
+    await dialogMessage("Restore failed: " + e, { title: "Marie Lookup", kind: "error" });
   }
 });
 
