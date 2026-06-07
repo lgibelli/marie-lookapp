@@ -1123,6 +1123,14 @@ fn show_lookup(app: &tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // MUST be the first plugin. A tray app with autostart can otherwise
+        // end up with two processes (autostart + a manual/updater launch),
+        // each with its own tray and SQLite connection — nondeterministic
+        // behaviour (the "list sometimes shows" Windows symptom). The second
+        // launch hands off to the first (summon its lookup) and exits.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            show_lookup(app);
+        }))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {

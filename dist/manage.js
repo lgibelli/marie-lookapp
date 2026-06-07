@@ -2,6 +2,7 @@ const { invoke } = window.__TAURI__.core;
 // Native dialogs — window.confirm()/alert() are unreliable in WKWebView
 // (silently return undefined on macOS), so never use them here.
 const { ask: dialogAsk, message: dialogMessage } = window.__TAURI__.dialog;
+const { getCurrentWindow } = window.__TAURI__.window;
 
 const $autostart = document.getElementById("autostart");
 const $list = document.getElementById("list");
@@ -581,6 +582,18 @@ $backupRestore.addEventListener("click", async () => {
   } catch (e) {
     await dialogMessage("Restore failed: " + e, { title: "Marie Lookup", kind: "error" });
   }
+});
+
+// Re-read the DB every time this window is shown/focused. The one-time
+// startup read below can lose the race between WebView2 init and the backend
+// DB state being ready on Windows, leaving a stale empty list that persists
+// because opening "Manage entries" only *shows* the already-loaded window —
+// it never reloads. (WKWebView on macOS always won that race, which is why it
+// only misbehaved on Windows.) refresh() re-renders the list/trash only; it
+// never touches the editor fields, so an in-progress edit is safe.
+getCurrentWindow().listen("tauri://focus", () => {
+  refresh();
+  refreshBackups();
 });
 
 updateSaveState();
