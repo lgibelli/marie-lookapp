@@ -17,6 +17,11 @@ on:
         required: true
         default: "Marie LookApp release"
 
+# Run the JS actions (checkout, cache, rust-cache, setup-node) on Node 24 —
+# matches test.yml and silences the Node 20 deprecation notice.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 # Single-repo publish (binaries + latest.json land on THIS repo), so the
 # built-in GITHUB_TOKEN suffices — no cross-repo PAT. It needs contents:write
 # to create the release.
@@ -28,10 +33,19 @@ jobs:
     runs-on: macos-14            # arm64 — matches the darwin-aarch64 updater artifact
     environment: release         # add required reviewers in Settings → Environments → release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Add Windows cross-targets
         run: rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc
+
+      # Cache target/ + the cargo registry so reruns don't recompile the whole
+      # Tauri dep tree for all three builds (two Windows triples + macOS). First
+      # run is cold; later runs restore. (Mirrors test.yml; distinct cache via
+      # the macOS runner + key.)
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: signed-release
 
       - name: Cache cargo-xwin MSVC CRT/SDK (~700 MB)
         uses: actions/cache@v4
@@ -39,10 +53,16 @@ jobs:
           path: ~/Library/Caches/cargo-xwin
           key: cargo-xwin-${{ runner.os }}-v1
 
+      - name: Cache the cargo-xwin binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-xwin
+          key: cargo-xwin-bin-${{ runner.os }}-v1
+
       - name: Install toolchain (cargo-xwin, NSIS, llvm-rc, osslsigncode)
         run: |
           brew install nsis llvm osslsigncode
-          cargo install --locked cargo-xwin
+          command -v cargo-xwin >/dev/null || cargo install --locked cargo-xwin
 
       - name: Setup Node + Tauri CLI
         uses: actions/setup-node@v4
