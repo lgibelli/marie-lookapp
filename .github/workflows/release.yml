@@ -71,40 +71,42 @@ jobs:
           if-no-files-found: error
 
   build-macos:
-    name: macOS arm64
+    name: macOS universal
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 
-      - name: Add Rust target
-        run: rustup target add aarch64-apple-darwin
+      # Both arches are required for the universal (lipo'd) binary.
+      - name: Add Rust targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Install Tauri CLI (devDependency)
         run: npm ci
 
-      # Unsigned build. createUpdaterArtifacts is forced off here (it is true in
-      # tauri.conf.json) so the bundler does not require the minisign updater key,
-      # which lives only on the maintainer's machine. --bundles app avoids the dmg
-      # bundler, which drives Finder via AppleScript and fails on headless runners.
-      - name: Build app bundle (unsigned, no updater artifacts)
+      # Unsigned universal build (Intel + Apple Silicon in one .app). Tauri builds
+      # both arches and lipos them. createUpdaterArtifacts is forced off here (it is
+      # true in tauri.conf.json) so the bundler does not require the minisign updater
+      # key, which lives only on the maintainer's machine. --bundles app avoids the
+      # dmg bundler, which drives Finder via AppleScript and fails on headless runners.
+      - name: Build universal app bundle (unsigned, no updater artifacts)
         run: |
-          npx tauri build --target aarch64-apple-darwin --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          npx tauri build --target universal-apple-darwin --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
       - name: Stage artifacts (.app.tar.gz + .dmg)
         shell: bash
         run: |
           set -euo pipefail
           VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          BUNDLE="src-tauri/target/aarch64-apple-darwin/release/bundle/macos"
+          BUNDLE="src-tauri/target/universal-apple-darwin/release/bundle/macos"
           APP="$(ls -d "$BUNDLE"/*.app | head -1)"
           mkdir -p out
-          tar -czf "out/marie-lookup-macos-arm64.app.tar.gz" -C "$BUNDLE" "$(basename "$APP")"
+          tar -czf "out/marie-lookup-macos-universal.app.tar.gz" -C "$BUNDLE" "$(basename "$APP")"
           hdiutil create -quiet -volname "Marie Lookup" -srcfolder "$APP" \
-            -ov -format UDZO "out/marie-lookup-${VERSION}-macos-arm64.dmg"
+            -ov -format UDZO "out/marie-lookup-${VERSION}-macos-universal.dmg"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: marie-lookup-macos-arm64
+          name: marie-lookup-macos-universal
           path: out/*
           if-no-files-found: error
 
@@ -130,7 +132,7 @@ jobs:
           set -euo pipefail
           VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
           TAG="v$VERSION"
-          DMG="marie-lookup-${VERSION}-macos-arm64.dmg"
+          DMG="marie-lookup-${VERSION}-macos-universal.dmg"
           NOTES="Automated **unsigned** CI build from branch \`${BRANCH}\` (commit \`${SRC_SHA}\`).
 
           Windows SmartScreen and macOS Gatekeeper warn on first run because these
@@ -146,5 +148,5 @@ jobs:
           gh release upload "$TAG" --repo "$REPO" --clobber \
             "artifacts/marie-lookup-windows-x64.exe" \
             "artifacts/marie-lookup-windows-arm64.exe" \
-            "artifacts/marie-lookup-macos-arm64.app.tar.gz" \
+            "artifacts/marie-lookup-macos-universal.app.tar.gz" \
             "artifacts/${DMG}"
