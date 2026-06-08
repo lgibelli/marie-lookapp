@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit configuration.
+#
+# NOTE: CodeRabbit (the GitHub App) reviews PULL REQUESTS only — it does NOT
+# review commits pushed directly to main. This repo currently commits straight
+# to main, so this file does nothing until PRs are used. For reviewing a local
+# diff before committing/pushing, use the CodeRabbit CLI (`coderabbit` /
+# the /code-review skill) instead.
+
+language: "en-US"
+
+reviews:
+  # "chill" = high-signal, fewer nits. Use "assertive" for stricter reviews.
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  auto_review:
+    enabled: true   # auto-review each new PR and its follow-up commits
+    drafts: false
+  path_instructions:
+    - path: "src-tauri/src/**"
+      instructions: >
+        Rust/Tauri backend. Flag .unwrap()/.expect()/panic! in non-test code;
+        blocking std::thread::sleep inside an async command (must use
+        tokio::time::sleep); any entry query that drops the `deleted_at IS NULL`
+        soft-delete filter; and changes that could strand data in the WAL
+        (checkpoint discipline). enigo must stay on the main thread on macOS.
+    - path: "dist/**/*.js"
+      instructions: >
+        Bundler-free frontend served straight to the webview. Flag any
+        innerHTML assignment — a project hook forbids it; use replaceChildren +
+        createElement/textContent. No new runtime JS dependencies.
+
+chat:
+  auto_reply: true
