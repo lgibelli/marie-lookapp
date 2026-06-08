@@ -17,11 +17,11 @@ on:
         required: true
         default: "Marie LookApp release"
 
-# We publish with a PAT (GH_RELEASES_TOKEN), not the workflow GITHUB_TOKEN —
-# the manifest goes to a *second* repo the GITHUB_TOKEN can't write to — so the
-# built-in token needs nothing.
+# Single-repo publish (binaries + latest.json land on THIS repo), so the
+# built-in GITHUB_TOKEN suffices — no cross-repo PAT. It needs contents:write
+# to create the release.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   release:
@@ -79,7 +79,7 @@ jobs:
       - name: Build, sign & publish (scripts/release.sh)
         env:
           SKIP_AUTHENTICODE: "1"                          # Windows stays unsigned (as today)
-          GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}      # writes binaries + manifest to both repos
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}           # built-in token; publishes to this repo
           # Pass the input via env (never interpolate ${{ }} into a run: shell —
           # a crafted notes value could inject commands into this secret-bearing job).
           NOTES: ${{ inputs.notes }}

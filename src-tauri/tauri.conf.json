@@ -10,7 +10,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQzQTFBRDREMTREMTgxRkMKUldUOGdkRVVUYTJoUSsyUkxZa2ZJcW5LK3R2ZzBNWTZQTFhQNnM2c3pXZEFwY0gwSTU0a3ZpTUwK",
       "endpoints": [
-        "https://github.com/lgibelli/marie-lookapp-releases/releases/latest/download/latest.json"
+        "https://github.com/lgibelli/marie-lookapp/releases/latest/download/latest.json"
       ],
       "windows": {
         "installMode": "quiet"

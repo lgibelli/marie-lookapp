@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
-# Local SIGNED release pipeline for Marie LookApp (the release/** CI only builds
-# unsigned test artifacts — see .github/workflows/release.yml).
+# SIGNED release pipeline for Marie LookApp. Runs locally, or in CI via
+# .github/workflows/release-signed.yml (which provisions the keys + toolchain
+# and then calls this same script). The release/** CI only builds unsigned test
+# artifacts — see .github/workflows/release.yml.
 #
 # Builds the Windows binaries (cargo-xwin) and the macOS bundle (tauri
 # bundler: .dmg + .app.tar.gz updater artifact), signs them (Authenticode via
 # sign-windows.sh + Tauri-updater minisign), generates the updater manifest
-# (latest.json, windows-x86_64 + darwin-aarch64), then publishes:
-#   - the signed binaries -> the source repo (BINARIES_REPO, now public)
-#   - latest.json         -> the releases repo (MANIFEST_REPO)
-# Installed clients fetch latest.json anonymously from the endpoint baked into
-# the app (https://github.com/<manifest-repo>/releases/latest/download/latest.json,
-# see src-tauri/tauri.conf.json); its url fields point at the signed binaries on
-# the source repo.
+# (latest.json, windows-x86_64 + darwin-aarch64), then publishes the signed
+# binaries AND latest.json to ONE public repo (BINARIES_REPO) as assets on a
+# single release. Installed clients fetch latest.json anonymously from the
+# endpoint baked into the app
+# (https://github.com/<repo>/releases/latest/download/latest.json, see
+# src-tauri/tauri.conf.json); its url fields point at the binaries on the same
+# release.
 #
 # The macOS bundle is unsigned/un-notarized (no Apple Developer cert):
 # first-time installs need right-click → Open; self-updates are fine.
@@ -37,11 +39,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# Signed binaries are hosted on the (now public) source repo; the updater
-# manifest stays on the releases repo, which is the endpoint baked into
-# installed clients (see src-tauri/tauri.conf.json).
+# One public repo now hosts BOTH the signed binaries and the updater manifest
+# (latest.json) — the latter rides along as an asset on the same release, so
+# /releases/latest/download/latest.json (the endpoint baked into installed
+# clients, see src-tauri/tauri.conf.json) resolves to it. This lets CI publish
+# with just the built-in GITHUB_TOKEN (no cross-repo PAT).
 BINARIES_REPO="lgibelli/marie-lookapp"
-MANIFEST_REPO="lgibelli/marie-lookapp-releases"
 UPDATER_KEY="${HOME}/.tauri/marie-lookup-updater.key"
 NOTES="${1:-Marie LookApp release}"
 
@@ -54,8 +57,13 @@ SETUP_EXE="${ROOT}/src-tauri/target/marie-lookup-setup-${VERSION}.exe"
 
 [ -f "${UPDATER_KEY}" ] || { echo "error: updater key missing: ${UPDATER_KEY}" >&2; exit 1; }
 command -v makensis >/dev/null 2>&1 || { echo "error: makensis not on PATH (port/brew install nsis)" >&2; exit 1; }
-gh release view "${TAG}" --repo "${MANIFEST_REPO}" >/dev/null 2>&1 \
-  && { echo "error: ${TAG} already published to ${MANIFEST_REPO} — bump the version first" >&2; exit 1; }
+# Abort if this version is already PUBLISHED (a non-prerelease release). A
+# leftover unsigned prerelease from release/** CI is fine — the publish step
+# below clobbers + promotes it.
+if [ "$(gh release view "${TAG}" --repo "${BINARIES_REPO}" --json isPrerelease -q .isPrerelease 2>/dev/null)" = "false" ]; then
+  echo "error: ${TAG} already published to ${BINARIES_REPO} — bump the version first" >&2
+  exit 1
+fi
 
 echo ">> building Windows binaries (x64 + arm64)"
 "${ROOT}/scripts/build-windows.sh" release all
@@ -151,13 +159,17 @@ cp "${LATEST}" "${STAGE}/latest.json"
 # Signed binaries -> source repo. The release/** CI may have already created
 # this tag as an unsigned prerelease; if so, clobber those assets with the
 # signed ones and promote it to a full release, otherwise create it.
-echo ">> publishing signed binaries to ${BINARIES_REPO} (${TAG})"
+echo ">> publishing signed binaries + latest.json to ${BINARIES_REPO} (${TAG})"
+# latest.json rides on the SAME release so /releases/latest/download/latest.json
+# resolves to it. The release must NOT be a prerelease — the updater's
+# /releases/latest endpoint skips prereleases (the clobber path forces it off).
 BIN_ASSETS=(
   "${STAGE}/marie-lookup-setup-${VERSION}.exe"
   "${STAGE}/marie-lookup-windows-x64.exe"
   "${STAGE}/marie-lookup-windows-arm64.exe"
   "${STAGE}/marie-lookup-${VERSION}-macos-arm64.dmg"
   "${STAGE}/marie-lookup-macos-arm64.app.tar.gz"
+  "${STAGE}/latest.json"
 )
 if gh release view "${TAG}" --repo "${BINARIES_REPO}" >/dev/null 2>&1; then
   gh release upload "${TAG}" --repo "${BINARIES_REPO}" --clobber "${BIN_ASSETS[@]}"
@@ -169,13 +181,5 @@ else
     "${BIN_ASSETS[@]}"
 fi
 
-# latest.json -> manifest repo. Deliberately NOT a prerelease: the updater reads
-# it through /releases/latest/download/latest.json, which skips prereleases.
-echo ">> publishing latest.json to ${MANIFEST_REPO} (${TAG})"
-gh release create "${TAG}" --repo "${MANIFEST_REPO}" \
-  --title "Marie LookApp ${VERSION}" --notes "${NOTES}" \
-  "${STAGE}/latest.json"
-
-echo ">> done:"
-echo "   binaries: https://github.com/${BINARIES_REPO}/releases/tag/${TAG}"
-echo "   manifest: https://github.com/${MANIFEST_REPO}/releases/tag/${TAG}"
+echo ">> done: https://github.com/${BINARIES_REPO}/releases/tag/${TAG}"
+echo "   (signed binaries + latest.json on the one release)"
