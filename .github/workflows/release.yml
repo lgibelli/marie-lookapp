@@ -18,6 +18,12 @@ on:
     branches:
       - 'release/**'
 
+env:
+  # Run JS actions on Node 24 ahead of the 2026-06-16 default switch. Covers the
+  # artifact actions (kept at v4 — bumping to v7/v8 is a breaking major change to
+  # vet separately) and msvc-dev-cmd without forcing risky upgrades.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 permissions:
   contents: write
 
@@ -40,7 +46,7 @@ jobs:
             arch: arm64
             msvc: amd64_arm64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Add Rust target
         run: rustup target add ${{ matrix.target }}
@@ -74,7 +80,7 @@ jobs:
     name: macOS universal
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # Both arches are required for the universal (lipo'd) binary.
       - name: Add Rust targets
@@ -115,7 +121,7 @@ jobs:
     needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/download-artifact@v4
         with:
