@@ -6,6 +6,13 @@ A small desktop app that lives in the menu bar / system tray. Press a global
 hotkey, search your saved entries, optionally select a portion of the body,
 and the text is pasted wherever your cursor is.
 
+## Download
+
+[**Get the latest release →**](https://github.com/lgibelli/marie-lookapp-releases/releases/latest)
+— Windows installer and a macOS (Apple Silicon) disk image. These builds are
+not yet notarised, so on first launch macOS Gatekeeper and Windows SmartScreen
+will warn; on macOS, right-click the app → **Open** to get past it once.
+
 ## Stack
 
 - **Tauri 2** (Rust backend + native webview UI)
