@@ -33,7 +33,8 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libgtk-3-dev \
             libayatana-appindicator3-dev \
-            librsvg2-dev
+            librsvg2-dev \
+            libxdo-dev   # enigo links -lxdo for X11 input simulation on Linux
 
       - uses: dtolnay/rust-toolchain@stable
 
