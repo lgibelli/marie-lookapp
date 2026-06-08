@@ -109,7 +109,41 @@ body.lookup {
   font-weight: 700;
   color: var(--accent);
 }
+/* The hit the match navigator is currently parked on. */
+.lookup-body .match.current {
+  background: var(--accent);
+  color: white;
+  border-radius: 3px;
+}
 
+/* Match navigator: "Showing match X of N" + prev/next, shown only while a
+   search has highlighted hits in the current body. */
+.lookup-matchnav {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--fg-dim);
+  background: var(--bg-elev);
+}
+.lookup-matchnav.hidden { display: none; }
+.matchnav-counter { margin-right: auto; }
+.matchnav-btn {
+  min-width: 24px;
+  padding: 1px 8px 3px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.matchnav-btn:hover:not(:disabled) { border-color: var(--accent); }
+.matchnav-btn:disabled { opacity: 0.4; cursor: default; }
 
 .lookup-hint {
   flex-shrink: 0;

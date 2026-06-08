@@ -10,9 +10,14 @@
       <input id="search" type="text" placeholder="Search entries…" autofocus />
     </div>
     <div id="matches" class="lookup-matches"></div>
+    <div id="match-nav" class="lookup-matchnav hidden">
+      <span id="match-counter" class="matchnav-counter"></span>
+      <button id="match-prev" class="matchnav-btn" type="button" tabindex="-1" title="Previous match" aria-label="Previous match">‹</button>
+      <button id="match-next" class="matchnav-btn" type="button" tabindex="-1" title="Next match" aria-label="Next match">›</button>
+    </div>
     <div id="body" class="lookup-body empty">Type to search.</div>
     <div class="lookup-hint">
-      <kbd>Enter</kbd> paste selection · <kbd>↑</kbd>/<kbd>↓</kbd> switch match · <kbd>Esc</kbd> cancel
+      <kbd>Enter</kbd> paste selection · <kbd>↑</kbd>/<kbd>↓</kbd> switch entry · <kbd>Esc</kbd> cancel
     </div>
     <script src="lookup.js"></script>
   </body>
