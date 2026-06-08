@@ -25,10 +25,10 @@ let inTopics = false;
 
 function renderMatches() {
   $matches.replaceChildren();
-  // In topics mode always show the pills — even a single one — so the user
-  // can see which recent entry the body belongs to and switch between them.
-  // In search mode a lone result needs no pill.
-  if (!inTopics && results.length <= 1) return;
+  // Always show the title pill(s) when there are results — even a single one —
+  // so the user can see which entry the body belongs to (and switch between
+  // them when there are several). An empty result set leaves $matches empty,
+  // which the CSS (.lookup-matches:empty) hides.
   results.forEach((r, i) => {
     const el = document.createElement("div");
     el.className = "pill" + (i === activeIdx ? " active" : "");
