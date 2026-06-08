@@ -1,0 +1,48 @@
+name: Tests
+
+# Runs the Rust DB-layer tests (src-tauri/src/db.rs) on EVERY push, on every
+# branch. Cheap and platform-agnostic — the tests only touch rusqlite against a
+# temp SQLite file, no window/GUI. Builds & releases live in release.yml and
+# stay gated to release/** branches; this workflow never builds a release.
+
+on:
+  push:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: cargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The crate links tauri, which pulls in webkit2gtk/gtk at *build* time on
+      # Linux even though these tests never open a window. Install the dev libs
+      # so the lib compiles. (macos-accessibility-client is cfg-gated to macOS,
+      # so it's never pulled here.)
+      - name: Install Linux webview build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Cache target/ + the registry so reruns don't recompile the whole Tauri
+      # dependency tree each time.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Run tests
+        working-directory: src-tauri
+        run: cargo test --lib
