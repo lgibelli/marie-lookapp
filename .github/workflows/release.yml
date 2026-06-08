@@ -1,0 +1,150 @@
+name: Build & publish unsigned releases
+
+# Builds UNSIGNED Windows (x64 + arm64) and macOS (arm64) binaries and
+# publishes them to a GitHub Release on THIS repo (lgibelli/marie-lookapp).
+#
+# Trigger: a push to a release/** branch ONLY (e.g. release/2.0.0-rc.14).
+# Does not run on main or any other branch.
+#
+# These are convenience/test builds. The SIGNED release plus the updater
+# latest.json is produced separately by scripts/release.sh, which publishes to
+# the public marie-lookapp-releases repo (the app's auto-updater reads from
+# there). CI here deliberately stays unsigned and self-hosted.
+#
+# No secrets: the built-in GITHUB_TOKEN (contents: write) publishes here.
+
+on:
+  push:
+    branches:
+      - 'release/**'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    name: Windows ${{ matrix.arch }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            arch: x64
+            msvc: amd64
+          - target: aarch64-pc-windows-msvc
+            arch: arm64
+            msvc: amd64_arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      # Activate the MSVC toolchain for the target so rusqlite's `bundled`
+      # feature can compile sqlite3.c (arm64 needs the cross compiler).
+      - name: Set up MSVC (${{ matrix.msvc }})
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.msvc }}
+
+      - name: Build release
+        working-directory: src-tauri
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Stage artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cp "src-tauri/target/${{ matrix.target }}/release/marie-lookup.exe" \
+             "out/marie-lookup-windows-${{ matrix.arch }}.exe"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: marie-lookup-windows-${{ matrix.arch }}
+          path: out/marie-lookup-windows-${{ matrix.arch }}.exe
+          if-no-files-found: error
+
+  build-macos:
+    name: macOS arm64
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add Rust target
+        run: rustup target add aarch64-apple-darwin
+
+      - name: Install Tauri CLI (devDependency)
+        run: npm ci
+
+      # Unsigned build. createUpdaterArtifacts is forced off here (it is true in
+      # tauri.conf.json) so the bundler does not require the minisign updater key,
+      # which lives only on the maintainer's machine. --bundles app avoids the dmg
+      # bundler, which drives Finder via AppleScript and fails on headless runners.
+      - name: Build app bundle (unsigned, no updater artifacts)
+        run: |
+          npx tauri build --target aarch64-apple-darwin --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Stage artifacts (.app.tar.gz + .dmg)
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          BUNDLE="src-tauri/target/aarch64-apple-darwin/release/bundle/macos"
+          APP="$(ls -d "$BUNDLE"/*.app | head -1)"
+          mkdir -p out
+          tar -czf "out/marie-lookup-macos-arm64.app.tar.gz" -C "$BUNDLE" "$(basename "$APP")"
+          hdiutil create -quiet -volname "Marie Lookup" -srcfolder "$APP" \
+            -ov -format UDZO "out/marie-lookup-${VERSION}-macos-arm64.dmg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: marie-lookup-macos-arm64
+          path: out/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create or update release on this repo
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          SRC_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          TAG="v$VERSION"
+          DMG="marie-lookup-${VERSION}-macos-arm64.dmg"
+          NOTES="Automated **unsigned** CI build from branch \`${BRANCH}\` (commit \`${SRC_SHA}\`).
+
+          Windows SmartScreen and macOS Gatekeeper warn on first run because these
+          builds are unsigned. Signed releases (with the updater manifest) are
+          published separately via scripts/release.sh to marie-lookapp-releases."
+          if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$REPO" \
+              --title "Marie LookApp $TAG (unsigned CI)" \
+              --notes "$NOTES" \
+              --prerelease \
+              --target "$SRC_SHA"
+          fi
+          gh release upload "$TAG" --repo "$REPO" --clobber \
+            "artifacts/marie-lookup-windows-x64.exe" \
+            "artifacts/marie-lookup-windows-arm64.exe" \
+            "artifacts/marie-lookup-macos-arm64.app.tar.gz" \
+            "artifacts/${DMG}"
