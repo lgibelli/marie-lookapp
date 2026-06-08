@@ -65,6 +65,21 @@ function renderHighlighted(text, q) {
   }
 }
 
+// Scroll $body so the first highlighted match sits ~2 lines below the top
+// edge — a little context above it — instead of leaving the user to scroll a
+// long entry by hand. The browser clamps scrollTop to [0, max].
+function scrollToFirstMatch() {
+  const first = $body.querySelector("b.match");
+  if (!first) {
+    $body.scrollTop = 0;
+    return;
+  }
+  const lineHeight = parseFloat(getComputedStyle($body).lineHeight) || 20;
+  const delta =
+    first.getBoundingClientRect().top - $body.getBoundingClientRect().top - lineHeight * 2;
+  $body.scrollTop += delta;
+}
+
 function renderBody() {
   if (!results.length) {
     $body.classList.add("empty");
@@ -77,15 +92,26 @@ function renderBody() {
     return;
   }
   $body.classList.remove("empty");
-  const text = results[activeIdx].body;
+  const result = results[activeIdx];
+  const text = result.body;
   const q = $search.value.trim();
   // Bold the matched term inside the body, but only once the query is long
   // enough to be meaningful (≥ MIN_SEARCH) — short queries would highlight
   // noise. Topics mode has an empty query, so it stays plain.
   if (q.length >= MIN_SEARCH) {
     renderHighlighted(text, q);
+    // Jump to the first body hit — but only when the match is in the content.
+    // A title hit means the entry is relevant by name, so keep the body at the
+    // top; diving into it would be disorienting. (If the title matches, the
+    // body may not contain the term at all.)
+    if (result.title.toLowerCase().includes(q.toLowerCase())) {
+      $body.scrollTop = 0;
+    } else {
+      scrollToFirstMatch();
+    }
   } else {
     $body.textContent = text;
+    $body.scrollTop = 0;
   }
 }
 
