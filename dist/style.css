@@ -44,6 +44,7 @@ body.lookup {
 }
 
 .lookup-search {
+  flex-shrink: 0;
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
   -webkit-app-region: drag;
@@ -64,6 +65,7 @@ body.lookup {
 .lookup-matches {
   display: flex;
   flex-wrap: wrap;
+  flex-shrink: 0;
   gap: 6px;
   padding: 6px 14px;
   border-bottom: 1px solid var(--border);
@@ -86,6 +88,10 @@ body.lookup {
 
 .lookup-body {
   flex: 1;
+  /* Without min-height:0 a flex child won't shrink below its content, so a
+     long entry would push the layout and squeeze the fixed bars (the pills
+     row in particular) instead of scrolling inside this box. */
+  min-height: 0;
   padding: 14px;
   overflow-y: auto;
   white-space: pre-wrap;
@@ -106,6 +112,7 @@ body.lookup {
 
 
 .lookup-hint {
+  flex-shrink: 0;
   padding: 8px 14px;
   border-top: 1px solid var(--border);
   font-size: 11px;
