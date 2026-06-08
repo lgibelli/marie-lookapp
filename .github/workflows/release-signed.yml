@@ -1,0 +1,86 @@
+name: Signed release
+
+# Manual-only on purpose: this job has access to the signing secrets, so it must
+# never be reachable from a push/PR (a fork PR or arbitrary branch could
+# otherwise exfiltrate the keys). Release flow:
+#   1. Bump the version in tauri.conf.json + package.json + Cargo.toml(+lock)
+#      and merge it to main via PR (main is protected).
+#   2. Run this workflow from the Actions tab, or:  gh workflow run release-signed.yml -f notes="…"
+# It mirrors the local scripts/release.sh exactly — CI only provisions the keys
+# and toolchain, then calls that script. Windows stays UNSIGNED (SKIP_AUTHENTICODE=1),
+# same as the current local releases; the updater verifies the minisign signature.
+on:
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: "Release notes (shown in latest.json + the GitHub release)"
+        required: true
+        default: "Marie LookApp release"
+
+# We publish with a PAT (GH_RELEASES_TOKEN), not the workflow GITHUB_TOKEN —
+# the manifest goes to a *second* repo the GITHUB_TOKEN can't write to — so the
+# built-in token needs nothing.
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: macos-14            # arm64 — matches the darwin-aarch64 updater artifact
+    environment: release         # add required reviewers in Settings → Environments → release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add Windows cross-targets
+        run: rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc
+
+      - name: Cache cargo-xwin MSVC CRT/SDK (~700 MB)
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/cargo-xwin
+          key: cargo-xwin-${{ runner.os }}-v1
+
+      - name: Install toolchain (cargo-xwin, NSIS, llvm-rc, osslsigncode)
+        run: |
+          brew install nsis llvm osslsigncode
+          cargo install --locked cargo-xwin
+
+      - name: Setup Node + Tauri CLI
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+
+      - name: Import macOS signing identity into a throwaway keychain
+        env:
+          CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          KCPW="$(openssl rand -base64 24)"
+          echo "$CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KCPW" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KCPW" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPW" "$KEYCHAIN"
+          # Put our keychain first in the search list so `codesign --sign "Marie
+          # Lookup Signing"` resolves the identity; keep the login keychain too.
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | sed s/\"//g)
+          rm "$RUNNER_TEMP/cert.p12"
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
+      - name: Write updater (minisign) key
+        env:
+          UPDATER_KEY: ${{ secrets.TAURI_UPDATER_KEY }}
+        run: |
+          mkdir -p ~/.tauri
+          printf '%s' "$UPDATER_KEY" > ~/.tauri/marie-lookup-updater.key
+
+      - name: Build, sign & publish (scripts/release.sh)
+        env:
+          SKIP_AUTHENTICODE: "1"                          # Windows stays unsigned (as today)
+          GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}      # writes binaries + manifest to both repos
+          # Pass the input via env (never interpolate ${{ }} into a run: shell —
+          # a crafted notes value could inject commands into this secret-bearing job).
+          NOTES: ${{ inputs.notes }}
+        run: scripts/release.sh "$NOTES"
