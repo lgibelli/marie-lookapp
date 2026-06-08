@@ -4,6 +4,10 @@ const { getCurrentWindow } = window.__TAURI__.window;
 const $search = document.getElementById("search");
 const $matches = document.getElementById("matches");
 const $body = document.getElementById("body");
+const $matchNav = document.getElementById("match-nav");
+const $matchCounter = document.getElementById("match-counter");
+const $matchPrev = document.getElementById("match-prev");
+const $matchNext = document.getElementById("match-next");
 
 // Minimum query length before we search. 1–2 characters match almost
 // everything, so we wait for the third keystroke (this also gates the body
@@ -22,6 +26,12 @@ let searchTimer = null;
 let topics = [];
 // True while showing the recent-topics state (vs. live search results).
 let inTopics = false;
+
+// Match navigator: the <b.match> hits in the *current* entry's body and which
+// one is focused. Rebuilt on every body render (see updateMatchNav); the prev/
+// next buttons walk this list and scroll the focused hit into view.
+let matchEls = [];
+let matchIdx = 0;
 
 function renderMatches() {
   $matches.replaceChildren();
@@ -65,23 +75,57 @@ function renderHighlighted(text, q) {
   }
 }
 
-// Scroll $body so the first highlighted match sits ~2 lines below the top
-// edge — a little context above it — instead of leaving the user to scroll a
-// long entry by hand. The browser clamps scrollTop to [0, max].
-function scrollToFirstMatch() {
-  const first = $body.querySelector("b.match");
-  if (!first) {
+// Scroll $body so `el` sits ~2 lines below the top edge — a little context
+// above it — instead of leaving the user to hunt through a long entry. The
+// browser clamps scrollTop to [0, max].
+function scrollToMatch(el) {
+  if (!el) {
     $body.scrollTop = 0;
     return;
   }
   const lineHeight = parseFloat(getComputedStyle($body).lineHeight) || 20;
   const delta =
-    first.getBoundingClientRect().top - $body.getBoundingClientRect().top - lineHeight * 2;
+    el.getBoundingClientRect().top - $body.getBoundingClientRect().top - lineHeight * 2;
   $body.scrollTop += delta;
+}
+
+// Park the navigator on hit `idx` (wrapping): move the .current highlight,
+// update the counter, and — unless told otherwise — scroll it into view.
+function setCurrentMatch(idx, scroll = true) {
+  if (!matchEls.length) return;
+  matchEls[matchIdx]?.classList.remove("current");
+  matchIdx = (idx + matchEls.length) % matchEls.length;
+  const el = matchEls[matchIdx];
+  el.classList.add("current");
+  $matchCounter.textContent = `Showing match ${matchIdx + 1} of ${matchEls.length}`;
+  if (scroll) scrollToMatch(el);
+}
+
+// Re-bind the navigator to the freshly highlighted body. Hidden when the
+// current entry has no body hits (e.g. the query only matched the title).
+function updateMatchNav() {
+  matchEls = [...$body.querySelectorAll("b.match")];
+  matchIdx = 0;
+  if (!matchEls.length) {
+    $matchNav.classList.add("hidden");
+    return;
+  }
+  $matchNav.classList.remove("hidden");
+  const single = matchEls.length <= 1;
+  $matchPrev.disabled = single;
+  $matchNext.disabled = single;
+  setCurrentMatch(0, false); // renderBody owns the initial scroll
+}
+
+function hideMatchNav() {
+  matchEls = [];
+  matchIdx = 0;
+  $matchNav.classList.add("hidden");
 }
 
 function renderBody() {
   if (!results.length) {
+    hideMatchNav();
     $body.classList.add("empty");
     const q = $search.value.trim();
     $body.textContent = !q
@@ -100,16 +144,18 @@ function renderBody() {
   // noise. Topics mode has an empty query, so it stays plain.
   if (q.length >= MIN_SEARCH) {
     renderHighlighted(text, q);
-    // Jump to the first body hit — but only when the match is in the content.
-    // A title hit means the entry is relevant by name, so keep the body at the
-    // top; diving into it would be disorienting. (If the title matches, the
-    // body may not contain the term at all.)
-    if (result.title.toLowerCase().includes(q.toLowerCase())) {
-      $body.scrollTop = 0;
+    updateMatchNav();
+    if (matchEls.length) {
+      // Land on the first hit so the counter ("match 1 of N") and the viewport
+      // agree from the start.
+      scrollToMatch(matchEls[0]);
     } else {
-      scrollToFirstMatch();
+      // Title-only match: no body hits to navigate, so keep the body at the
+      // top instead of diving in.
+      $body.scrollTop = 0;
     }
   } else {
+    hideMatchNav();
     $body.textContent = text;
     $body.scrollTop = 0;
   }
@@ -176,6 +222,17 @@ $search.addEventListener("input", () => {
   searchTimer = setTimeout(doSearch, 120);
 });
 
+// Match navigator arrows. mousedown + preventDefault keeps the caret in the
+// search box (same trick as the result pills) so typing stays uninterrupted.
+$matchPrev.addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  setCurrentMatch(matchIdx - 1);
+});
+$matchNext.addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  setCurrentMatch(matchIdx + 1);
+});
+
 async function pasteText(text, entryId) {
   if (!text) return;
   try {
@@ -201,6 +258,7 @@ async function paste() {
 }
 
 function showAccessibilityHint() {
+  hideMatchNav();
   $body.classList.remove("empty");
   $body.replaceChildren();
   const title = document.createElement("h3");
