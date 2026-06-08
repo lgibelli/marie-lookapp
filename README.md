@@ -150,3 +150,9 @@ snippets that the lookup popup searches.
 
 This codebase replaces the original .NET / WPF implementation in this repo.
 That old code lives on as the branch `legacy-abandoned-20260522`.
+
+## License
+
+Free software under the GNU Affero General Public License v3.0 or later
+([AGPL-3.0-or-later](LICENSE)) — derivatives, including network-deployed ones,
+must make their source available under the same terms.

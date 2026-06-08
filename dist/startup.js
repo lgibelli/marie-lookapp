@@ -140,6 +140,10 @@ document.getElementById("releases-link").addEventListener("click", () => {
   invoke("open_releases_page").catch(() => {});
 });
 
+document.getElementById("license-link").addEventListener("click", () => {
+  invoke("open_license_page").catch(() => {});
+});
+
 $ok.addEventListener("click", async () => {
   if (document.getElementById("dont-show").checked) {
     localStorage.setItem(DISMISS_KEY, "1");

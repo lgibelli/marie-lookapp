@@ -1061,6 +1061,32 @@ fn open_releases_page() -> Result<(), AppError> {
     Ok(())
 }
 
+/// Open this app's license (AGPL-3.0) on the public source repo. Hand-rolled to
+/// match `open_releases_url` rather than pulling in tauri-plugin-opener.
+fn open_license_url() -> std::io::Result<()> {
+    let url = "https://github.com/lgibelli/marie-lookapp/blob/main/LICENSE";
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open").arg(url).spawn()?;
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()?;
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    std::process::Command::new("xdg-open").arg(url).spawn()?;
+    Ok(())
+}
+
+#[tauri::command]
+fn open_license_page() -> Result<(), AppError> {
+    open_license_url()?;
+    Ok(())
+}
+
 /// Force a WAL checkpoint now. Called from the frontend right before an update
 /// install: the Windows updater's installer `taskkill /F`s us (the exe is
 /// locked while running and our WM_CLOSE-to-hide makes a polite close a no-op),
@@ -1071,22 +1097,24 @@ fn checkpoint_now(app: tauri::AppHandle) -> Result<(), AppError> {
     Ok(())
 }
 
-/// Tray "About Marie Lookup…": a tiny native dialog — name + version + a
-/// button to the releases page. Deliberately NOT the startup window (that's
-/// the richer status panel "Check for updates…" uses); About is at-a-glance.
+/// Tray "About Marie Lookup…": a tiny native dialog — name + version + license +
+/// a button to view the license. Deliberately NOT the startup window (that's the
+/// richer status panel "Check for updates…" uses); About is at-a-glance.
 fn show_about(app: &tauri::AppHandle) {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
     let version = app.package_info().version.to_string();
     app.dialog()
-        .message(format!("Marie Lookup v{version}"))
+        .message(format!(
+            "Marie Lookup v{version}\n\nLicensed under the GNU Affero General Public License v3.0 (AGPL-3.0-or-later)."
+        ))
         .title("About Marie Lookup")
         .buttons(MessageDialogButtons::OkCancelCustom(
-            "Open releases page".into(),
+            "View license".into(),
             "Close".into(),
         ))
-        .show(|open_releases| {
-            if open_releases {
-                let _ = open_releases_url();
+        .show(|view_license| {
+            if view_license {
+                let _ = open_license_url();
             }
         });
 }
@@ -1329,6 +1357,7 @@ pub fn run() {
             restore_entry,
             recent_topics,
             open_releases_page,
+            open_license_page,
             checkpoint_now,
         ])
         .on_window_event(|window, event| {
