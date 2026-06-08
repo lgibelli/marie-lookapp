@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# Local release pipeline for Marie LookApp — deliberately no CI.
+# Local SIGNED release pipeline for Marie LookApp (the release/** CI only builds
+# unsigned test artifacts — see .github/workflows/release.yml).
 #
 # Builds the Windows binaries (cargo-xwin) and the macOS bundle (tauri
 # bundler: .dmg + .app.tar.gz updater artifact), signs them (Authenticode via
 # sign-windows.sh + Tauri-updater minisign), generates the updater manifest
-# (latest.json, windows-x86_64 + darwin-aarch64) and publishes everything as
-# a GitHub Release on the PUBLIC releases repo — the app's auto-updater
-# fetches
-#   https://github.com/<releases-repo>/releases/latest/download/latest.json
-# anonymously, so this must NOT be the (private) source repo.
+# (latest.json, windows-x86_64 + darwin-aarch64), then publishes:
+#   - the signed binaries -> the source repo (BINARIES_REPO, now public)
+#   - latest.json         -> the releases repo (MANIFEST_REPO)
+# Installed clients fetch latest.json anonymously from the endpoint baked into
+# the app (https://github.com/<manifest-repo>/releases/latest/download/latest.json,
+# see src-tauri/tauri.conf.json); its url fields point at the signed binaries on
+# the source repo.
 #
 # The macOS bundle is unsigned/un-notarized (no Apple Developer cert):
 # first-time installs need right-click → Open; self-updates are fine.
@@ -34,7 +37,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-RELEASES_REPO="lgibelli/marie-lookapp-releases"
+# Signed binaries are hosted on the (now public) source repo; the updater
+# manifest stays on the releases repo, which is the endpoint baked into
+# installed clients (see src-tauri/tauri.conf.json).
+BINARIES_REPO="lgibelli/marie-lookapp"
+MANIFEST_REPO="lgibelli/marie-lookapp-releases"
 UPDATER_KEY="${HOME}/.tauri/marie-lookup-updater.key"
 NOTES="${1:-Marie LookApp release}"
 
@@ -47,8 +54,8 @@ SETUP_EXE="${ROOT}/src-tauri/target/marie-lookup-setup-${VERSION}.exe"
 
 [ -f "${UPDATER_KEY}" ] || { echo "error: updater key missing: ${UPDATER_KEY}" >&2; exit 1; }
 command -v makensis >/dev/null 2>&1 || { echo "error: makensis not on PATH (port/brew install nsis)" >&2; exit 1; }
-gh release view "${TAG}" --repo "${RELEASES_REPO}" >/dev/null 2>&1 \
-  && { echo "error: ${TAG} already exists on ${RELEASES_REPO} — bump the version first" >&2; exit 1; }
+gh release view "${TAG}" --repo "${MANIFEST_REPO}" >/dev/null 2>&1 \
+  && { echo "error: ${TAG} already published to ${MANIFEST_REPO} — bump the version first" >&2; exit 1; }
 
 echo ">> building Windows binaries (x64 + arm64)"
 "${ROOT}/scripts/build-windows.sh" release all
@@ -119,11 +126,11 @@ cat > "${LATEST}" <<EOF
   "platforms": {
     "windows-x86_64": {
       "signature": "${SIG}",
-      "url": "https://github.com/${RELEASES_REPO}/releases/download/${TAG}/marie-lookup-setup-${VERSION}.exe"
+      "url": "https://github.com/${BINARIES_REPO}/releases/download/${TAG}/marie-lookup-setup-${VERSION}.exe"
     },
     "darwin-aarch64": {
       "signature": "${MAC_SIG}",
-      "url": "https://github.com/${RELEASES_REPO}/releases/download/${TAG}/marie-lookup-macos-arm64.app.tar.gz"
+      "url": "https://github.com/${BINARIES_REPO}/releases/download/${TAG}/marie-lookup-macos-arm64.app.tar.gz"
     }
   }
 }
@@ -141,14 +148,34 @@ cp "${MAC_DMG}" "${STAGE}/marie-lookup-${VERSION}-macos-arm64.dmg"
 cp "${MAC_TARGZ}" "${STAGE}/marie-lookup-macos-arm64.app.tar.gz"
 cp "${LATEST}" "${STAGE}/latest.json"
 
-echo ">> publishing ${TAG} to ${RELEASES_REPO}"
-gh release create "${TAG}" --repo "${RELEASES_REPO}" \
+# Signed binaries -> source repo. The release/** CI may have already created
+# this tag as an unsigned prerelease; if so, clobber those assets with the
+# signed ones and promote it to a full release, otherwise create it.
+echo ">> publishing signed binaries to ${BINARIES_REPO} (${TAG})"
+BIN_ASSETS=(
+  "${STAGE}/marie-lookup-setup-${VERSION}.exe"
+  "${STAGE}/marie-lookup-windows-x64.exe"
+  "${STAGE}/marie-lookup-windows-arm64.exe"
+  "${STAGE}/marie-lookup-${VERSION}-macos-arm64.dmg"
+  "${STAGE}/marie-lookup-macos-arm64.app.tar.gz"
+)
+if gh release view "${TAG}" --repo "${BINARIES_REPO}" >/dev/null 2>&1; then
+  gh release upload "${TAG}" --repo "${BINARIES_REPO}" --clobber "${BIN_ASSETS[@]}"
+  gh release edit "${TAG}" --repo "${BINARIES_REPO}" --prerelease=false
+else
+  gh release create "${TAG}" --repo "${BINARIES_REPO}" \
+    --title "Marie LookApp ${VERSION}" --notes "${NOTES}" \
+    --target "$(git -C "${ROOT}" rev-parse HEAD)" \
+    "${BIN_ASSETS[@]}"
+fi
+
+# latest.json -> manifest repo. Deliberately NOT a prerelease: the updater reads
+# it through /releases/latest/download/latest.json, which skips prereleases.
+echo ">> publishing latest.json to ${MANIFEST_REPO} (${TAG})"
+gh release create "${TAG}" --repo "${MANIFEST_REPO}" \
   --title "Marie LookApp ${VERSION}" --notes "${NOTES}" \
-  "${STAGE}/marie-lookup-setup-${VERSION}.exe" \
-  "${STAGE}/marie-lookup-windows-x64.exe" \
-  "${STAGE}/marie-lookup-windows-arm64.exe" \
-  "${STAGE}/marie-lookup-${VERSION}-macos-arm64.dmg" \
-  "${STAGE}/marie-lookup-macos-arm64.app.tar.gz" \
   "${STAGE}/latest.json"
 
-echo ">> done: https://github.com/${RELEASES_REPO}/releases/tag/${TAG}"
+echo ">> done:"
+echo "   binaries: https://github.com/${BINARIES_REPO}/releases/tag/${TAG}"
+echo "   manifest: https://github.com/${MANIFEST_REPO}/releases/tag/${TAG}"
