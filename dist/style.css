@@ -63,11 +63,10 @@ body.lookup {
 
 .lookup-matches {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   padding: 6px 14px;
   border-bottom: 1px solid var(--border);
-  overflow-x: auto;
-  scrollbar-width: thin;
 }
 .lookup-matches:empty { display: none; }
 .lookup-matches .pill {

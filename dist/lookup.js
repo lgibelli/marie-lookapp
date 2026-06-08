@@ -5,6 +5,11 @@ const $search = document.getElementById("search");
 const $matches = document.getElementById("matches");
 const $body = document.getElementById("body");
 
+// Minimum query length before we search. 1–2 characters match almost
+// everything, so we wait for the third keystroke (this also gates the body
+// highlighting and the "keep typing" hint, so they stay in sync).
+const MIN_SEARCH = 3;
+
 let results = [];
 let activeIdx = 0;
 let searchTimer = null;
@@ -63,18 +68,21 @@ function renderHighlighted(text, q) {
 function renderBody() {
   if (!results.length) {
     $body.classList.add("empty");
-    $body.textContent = $search.value.trim()
-      ? "No matches."
-      : "Type to search.";
+    const q = $search.value.trim();
+    $body.textContent = !q
+      ? "Type to search."
+      : q.length < MIN_SEARCH
+      ? "Keep typing…"
+      : "No matches.";
     return;
   }
   $body.classList.remove("empty");
   const text = results[activeIdx].body;
   const q = $search.value.trim();
   // Bold the matched term inside the body, but only once the query is long
-  // enough to be meaningful (≥3 chars) — short queries would highlight noise.
-  // Topics mode has an empty query, so it stays plain.
-  if (q.length >= 3) {
+  // enough to be meaningful (≥ MIN_SEARCH) — short queries would highlight
+  // noise. Topics mode has an empty query, so it stays plain.
+  if (q.length >= MIN_SEARCH) {
     renderHighlighted(text, q);
   } else {
     $body.textContent = text;
@@ -119,6 +127,14 @@ async function doSearch() {
     return;
   }
   inTopics = false;
+  // Hold off until MIN_SEARCH chars: show no pills and a "keep typing" body
+  // (via renderBody) rather than a flood of 1–2 char matches.
+  if (q.length < MIN_SEARCH) {
+    results = [];
+    activeIdx = 0;
+    render();
+    return;
+  }
   try {
     results = await invoke("search_entries", { query: q });
   } catch (e) {
