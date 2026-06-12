@@ -5,3 +5,6 @@ src-tauri/gen/
 
 # Local project instructions (not tracked)
 CLAUDE.md
+
+# Local-only signing config for scripts/release.sh (real values; never commit)
+scripts/release.env

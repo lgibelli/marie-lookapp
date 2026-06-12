@@ -1,22 +1,15 @@
 name: Build & publish unsigned releases
 
-# Builds UNSIGNED Windows (x64 + arm64) and macOS (arm64) binaries and
-# publishes them to a GitHub Release on THIS repo (lgibelli/marie-lookapp).
-#
-# Trigger: a push to a release/** branch ONLY (e.g. release/2.0.0-rc.14).
-# Does not run on main or any other branch.
-#
-# These are convenience/test builds. The SIGNED release plus the updater
-# latest.json is produced separately by scripts/release.sh, which publishes to
-# the public marie-lookapp-releases repo (the app's auto-updater reads from
-# there). CI here deliberately stays unsigned and self-hosted.
+# Builds UNSIGNED Windows (x64 + arm64) and macOS (arm64) binaries — a
+# convenience/test build only. MANUAL trigger (workflow_dispatch) on purpose:
+# a push to release/** now runs the SIGNED + notarized pipeline
+# (release-signed.yml) instead, so this must not also fire on release/** or the
+# two would race to publish the same tag.
 #
 # No secrets: the built-in GITHUB_TOKEN (contents: write) publishes here.
 
 on:
-  push:
-    branches:
-      - 'release/**'
+  workflow_dispatch:
 
 env:
   # Run JS actions on Node 24 ahead of the 2026-06-16 default switch. Covers the
