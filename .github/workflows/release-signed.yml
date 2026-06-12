@@ -79,7 +79,9 @@ jobs:
       # keychain so codesign reliably resolves the identity. (The hand-rolled
       # version intermittently left a keychain codesign couldn't read the key from.)
       - name: Import Developer ID certificate
-        uses: apple-actions/import-codesign-certs@v7
+        # Pinned to a full commit SHA (supply-chain hardening): this step receives
+        # the signing cert + password, so a re-pointed tag could exfiltrate them.
+        uses: apple-actions/import-codesign-certs@5142e029c445c10ffc7149d172e540235a065466 # v7.0.0
         with:
           p12-file-base64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
           p12-password: ${{ secrets.MACOS_CERT_PASSWORD }}
