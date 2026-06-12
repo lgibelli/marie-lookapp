@@ -152,9 +152,15 @@ MAC_TARGZ="${BUNDLE_DIR}/macos/Marie Lookup.app.tar.gz"
 MAC_SIG="$(cat "${MAC_TARGZ}.sig")"
 
 MAC_DMG="${BUNDLE_DIR}/macos/marie-lookup-${VERSION}-macos-arm64.dmg"
+# Stage the .app next to an /Applications symlink so the mounted DMG offers a
+# drag-to-Applications target (the standard macOS install UX).
+DMG_STAGE="$(mktemp -d)"
+cp -R "${MAC_APP}" "${DMG_STAGE}/"
+ln -s /Applications "${DMG_STAGE}/Applications"
 hdiutil create -quiet -volname "Marie Lookup" \
-  -srcfolder "${MAC_APP}" \
+  -srcfolder "${DMG_STAGE}" \
   -ov -format UDZO "${MAC_DMG}"
+rm -rf "${DMG_STAGE}"
 
 # Notarize + staple the DMG itself. The .app inside is already notarized, but a
 # downloaded .dmg is Gatekeeper-checked too; stapling lets the image pass offline.
@@ -200,6 +206,7 @@ cp "${SETUP_EXE}" "${STAGE}/marie-lookup-setup-${VERSION}.exe"
 cp "${X64_EXE}" "${STAGE}/marie-lookup-windows-x64.exe"
 cp "${ARM64_EXE}" "${STAGE}/marie-lookup-windows-arm64.exe"
 cp "${MAC_DMG}" "${STAGE}/marie-lookup-${VERSION}-macos-arm64.dmg"
+cp "${MAC_DMG}" "${STAGE}/marie-lookup-latest.dmg"   # stable, versionless link for salamacchine.it
 cp "${MAC_TARGZ}" "${STAGE}/marie-lookup-macos-arm64.app.tar.gz"
 cp "${LATEST}" "${STAGE}/latest.json"
 
@@ -215,6 +222,7 @@ BIN_ASSETS=(
   "${STAGE}/marie-lookup-windows-x64.exe"
   "${STAGE}/marie-lookup-windows-arm64.exe"
   "${STAGE}/marie-lookup-${VERSION}-macos-arm64.dmg"
+  "${STAGE}/marie-lookup-latest.dmg"
   "${STAGE}/marie-lookup-macos-arm64.app.tar.gz"
   "${STAGE}/latest.json"
 )
