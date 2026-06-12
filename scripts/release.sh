@@ -39,6 +39,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Org/signing identifiers are NEVER hardcoded in this (public) repo. Locally they
+# come from a gitignored scripts/release.env; in CI from repo Variables/Secrets
+# exported as env. See scripts/release.env.example.
+# shellcheck source=/dev/null
+[ -f "${ROOT}/scripts/release.env" ] && . "${ROOT}/scripts/release.env"
 # One public repo now hosts BOTH the signed binaries and the updater manifest
 # (latest.json) — the latter rides along as an asset on the same release, so
 # /releases/latest/download/latest.json (the endpoint baked into installed
@@ -92,36 +97,73 @@ echo ">> generating updater signature"
 (cd "${ROOT}" && npx tauri signer sign -f "${UPDATER_KEY}" --password "" "${SETUP_EXE}")
 SIG="$(cat "${SETUP_EXE}.sig")"
 
-# macOS: bundle the .app plus — thanks to createUpdaterArtifacts — the
-# .app.tar.gz the updater consumes, minisigned during the build (the bundler
-# reads TAURI_SIGNING_PRIVATE_KEY, which takes a path or the key itself; the
-# _PATH variant is only understood by `tauri signer sign`). The .dmg is then
-# rolled by hand with hdiutil: tauri's dmg bundler drives Finder via
-# AppleScript and fails in non-interactive shells.
-echo ">> building macOS bundle (app + updater artifact + dmg)"
+# macOS: the Tauri bundler builds the .app, signs it with the StarData
+# Developer ID identity under the hardened runtime, notarizes + staples it (when
+# notary creds are present), then writes the .app.tar.gz the updater consumes
+# (minisigned via TAURI_SIGNING_PRIVATE_KEY). The signing identity must be in
+# the keychain — CI imports it into a throwaway keychain; locally it's already
+# there. Notarization uses an App Store Connect API key when
+# APPLE_API_KEY_PATH/_ISSUER/_KEY_ID are exported (the CI default) or an
+# app-specific password via APPLE_ID/APPLE_PASSWORD; with neither the app is
+# signed but NOT notarized and a downloaded DMG still warns.
+#
+# This replaces the old self-signed "Marie Lookup Signing" cert. Developer ID is
+# also a *stable* cert, so the Accessibility/TCC grant survives auto-updates
+# exactly as before (TCC keys on the cert's designated requirement) — and now
+# Gatekeeper passes with no right-click → Open. The DMG is rolled by hand
+# (tauri's dmg bundler drives Finder via AppleScript and fails headless) and
+# notarized + stapled on its own so the downloaded image itself is clean.
+DEVID="${MACOS_SIGNING_IDENTITY:-}"
+MAC_SIGN_ENV=()
+NOTARIZE=0
+if [ -n "${DEVID}" ] && security find-identity -v -p codesigning 2>/dev/null | grep -qF "${DEVID}"; then
+  MAC_SIGN_ENV+=("APPLE_SIGNING_IDENTITY=${DEVID}")
+  if [ -n "${APPLE_API_KEY_PATH:-}" ] && [ -n "${APPLE_API_ISSUER:-}" ] && [ -n "${APPLE_API_KEY_ID:-}" ]; then
+    MAC_SIGN_ENV+=("APPLE_API_ISSUER=${APPLE_API_ISSUER}" "APPLE_API_KEY=${APPLE_API_KEY_ID}" "APPLE_API_KEY_PATH=${APPLE_API_KEY_PATH}")
+    NOTARIZE=1
+    echo ">> macOS: Developer ID sign + notarize (App Store Connect API key)"
+  elif [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_PASSWORD:-}" ]; then
+    MAC_SIGN_ENV+=("APPLE_ID=${APPLE_ID}" "APPLE_PASSWORD=${APPLE_PASSWORD}" "APPLE_TEAM_ID=${APPLE_TEAM_ID}")
+    NOTARIZE=1
+    echo ">> macOS: Developer ID sign + notarize (app-specific password)"
+  else
+    echo ">> macOS: Developer ID sign only (no notary creds — a downloaded DMG will warn)"
+  fi
+else
+  echo ">> WARNING: Developer ID cert not in keychain — building AD-HOC (Gatekeeper will warn)" >&2
+fi
+
+echo ">> building macOS bundle (app + updater artifact)"
 (cd "${ROOT}" && TAURI_SIGNING_PRIVATE_KEY="${UPDATER_KEY}" \
-  TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" npx tauri build --bundles app)
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" \
+  "${MAC_SIGN_ENV[@]}" npx tauri build --bundles app)
 BUNDLE_DIR="${ROOT}/src-tauri/target/release/bundle"
 MAC_APP="${BUNDLE_DIR}/macos/Marie Lookup.app"
 
-# Sign with the stable self-signed identity ("Marie Lookup Signing" in the
-# login keychain — one-time setup, see CLAUDE.md). Without this the app is
-# ad-hoc signed and its signature changes EVERY build, which silently
-# invalidates the macOS Accessibility (TCC) grant on each auto-update: the
-# permission is keyed on the certificate, not the path.
-echo ">> codesigning macOS app (stable identity)"
-codesign --force --deep --sign "Marie Lookup Signing" "${MAC_APP}"
-
-# Re-create the updater artifact from the SIGNED app — the bundler tars it
-# before we sign — and minisign the new archive.
+# The bundler tars + minisigns the already-signed/notarized/stapled app, so use
+# its artifact directly (no manual re-tar now that signing happens in-build).
 MAC_TARGZ="${BUNDLE_DIR}/macos/Marie Lookup.app.tar.gz"
-tar -czf "${MAC_TARGZ}" -C "${BUNDLE_DIR}/macos" "Marie Lookup.app"
-(cd "${ROOT}" && npx tauri signer sign -f "${UPDATER_KEY}" --password "" "${MAC_TARGZ}")
+[ -f "${MAC_TARGZ}.sig" ] || { echo "error: updater artifact sig missing — is createUpdaterArtifacts on?" >&2; exit 1; }
 MAC_SIG="$(cat "${MAC_TARGZ}.sig")"
+
 MAC_DMG="${BUNDLE_DIR}/macos/marie-lookup-${VERSION}-macos-arm64.dmg"
 hdiutil create -quiet -volname "Marie Lookup" \
   -srcfolder "${MAC_APP}" \
   -ov -format UDZO "${MAC_DMG}"
+
+# Notarize + staple the DMG itself. The .app inside is already notarized, but a
+# downloaded .dmg is Gatekeeper-checked too; stapling lets the image pass offline.
+if [ "${NOTARIZE}" = "1" ]; then
+  echo ">> notarizing + stapling the DMG"
+  if [ -n "${APPLE_API_KEY_PATH:-}" ]; then
+    xcrun notarytool submit "${MAC_DMG}" \
+      --key "${APPLE_API_KEY_PATH}" --key-id "${APPLE_API_KEY_ID}" --issuer "${APPLE_API_ISSUER}" --wait
+  else
+    xcrun notarytool submit "${MAC_DMG}" \
+      --apple-id "${APPLE_ID}" --password "${APPLE_PASSWORD}" --team-id "${APPLE_TEAM_ID}" --wait
+  fi
+  xcrun stapler staple "${MAC_DMG}"
+fi
 
 echo ">> generating latest.json"
 LATEST="${ROOT}/src-tauri/target/latest.json"

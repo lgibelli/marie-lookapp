@@ -1,15 +1,19 @@
 name: Signed release
 
-# Manual-only on purpose: this job has access to the signing secrets, so it must
-# never be reachable from a push/PR (a fork PR or arbitrary branch could
-# otherwise exfiltrate the keys). Release flow:
-#   1. Bump the version in tauri.conf.json + package.json + Cargo.toml(+lock)
-#      and merge it to main via PR (main is protected).
-#   2. Run this workflow from the Actions tab, or:  gh workflow run release-signed.yml -f notes="…"
+# Publishes the SIGNED + NOTARIZED release. Triggers on a push to a release/**
+# branch (only maintainers with push access can create those — a fork PR canNOT,
+# so the signing secrets stay safe), or manually from the Actions tab. This job
+# has access to the signing secrets; never make it reachable from pull_request /
+# pull_request_target. Release flow:
+#   1. Bump the version in tauri.conf.json + package.json + Cargo.toml(+lock).
+#   2. Push a release/<version> branch (e.g. release/2.0.0) — or run manually.
 # It mirrors the local scripts/release.sh exactly — CI only provisions the keys
-# and toolchain, then calls that script. Windows stays UNSIGNED (SKIP_AUTHENTICODE=1),
-# same as the current local releases; the updater verifies the minisign signature.
+# (Developer ID cert + notary API key + minisign updater key) and toolchain, then
+# calls that script, which signs the .app with Developer ID, notarizes + staples
+# the .app and the DMG, and publishes. Windows stays UNSIGNED (SKIP_AUTHENTICODE=1).
 on:
+  push:
+    branches: ["release/**"]
   workflow_dispatch:
     inputs:
       notes:
@@ -96,11 +100,24 @@ jobs:
           mkdir -p ~/.tauri
           printf '%s' "$UPDATER_KEY" > ~/.tauri/marie-lookup-updater.key
 
+      - name: Write notary (App Store Connect) API key
+        env:
+          APPLE_API_KEY_B64: ${{ secrets.APPLE_API_KEY_B64 }}
+        run: printf '%s' "$APPLE_API_KEY_B64" | base64 --decode > "$RUNNER_TEMP/notary-key.p8"
+
       - name: Build, sign & publish (scripts/release.sh)
         env:
           SKIP_AUTHENTICODE: "1"                          # Windows stays unsigned (as today)
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}           # built-in token; publishes to this repo
-          # Pass the input via env (never interpolate ${{ }} into a run: shell —
-          # a crafted notes value could inject commands into this secret-bearing job).
-          NOTES: ${{ inputs.notes }}
+          # macOS Developer ID sign + notarize. Identity/team are non-secret repo
+          # Variables; the notary key is the .p8 written above + its id/issuer.
+          MACOS_SIGNING_IDENTITY: ${{ vars.MACOS_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          APPLE_API_KEY_PATH: ${{ runner.temp }}/notary-key.p8
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          # Pass notes via env (never interpolate ${{ }} into a run: shell — a
+          # crafted value could inject commands into this secret-bearing job).
+          # On a release/** push there's no input, so fall back to the branch name.
+          NOTES: ${{ inputs.notes || format('Marie LookApp release ({0})', github.ref_name) }}
         run: scripts/release.sh "$NOTES"
