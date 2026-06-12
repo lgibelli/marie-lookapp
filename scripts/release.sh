@@ -116,7 +116,12 @@ SIG="$(cat "${SETUP_EXE}.sig")"
 DEVID="${MACOS_SIGNING_IDENTITY:-}"
 MAC_SIGN_ENV=()
 NOTARIZE=0
-if [ -n "${DEVID}" ] && security find-identity -v -p codesigning 2>/dev/null | grep -qF "${DEVID}"; then
+# NOTE: `find-identity` WITHOUT -v: the -v "valid only" filter does an online
+# OCSP/revocation check that intermittently times out on CI runners and then
+# drops our (perfectly good) Developer ID cert, silently falling back to ad-hoc.
+# The cert is reliably imported ("1 identity imported"), so match it without -v;
+# codesign itself signs fine (signing doesn't need the online check).
+if [ -n "${DEVID}" ] && security find-identity -p codesigning 2>/dev/null | grep -qF "${DEVID}"; then
   MAC_SIGN_ENV+=("APPLE_SIGNING_IDENTITY=${DEVID}")
   if [ -n "${APPLE_API_KEY_PATH:-}" ] && [ -n "${APPLE_API_ISSUER:-}" ] && [ -n "${APPLE_API_KEY_ID:-}" ]; then
     MAC_SIGN_ENV+=("APPLE_API_ISSUER=${APPLE_API_ISSUER}" "APPLE_API_KEY=${APPLE_API_KEY_ID}" "APPLE_API_KEY_PATH=${APPLE_API_KEY_PATH}")
