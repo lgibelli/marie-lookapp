@@ -137,9 +137,11 @@ echo ">> building macOS bundle (app + updater artifact)"
 # `env` is required: the MAC_SIGN_ENV array holds VAR=value strings, and bash
 # only treats VAR=value as an assignment when it's a literal at parse time — an
 # array element would instead be run as a command ("…: command not found").
+# ${arr[@]+"${arr[@]}"} expands safely when the array is EMPTY under `set -u`
+# on the runner's bash 3.2 (a bare "${arr[@]}" there is an "unbound variable").
 (cd "${ROOT}" && env TAURI_SIGNING_PRIVATE_KEY="${UPDATER_KEY}" \
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" \
-  "${MAC_SIGN_ENV[@]}" npx tauri build --bundles app)
+  ${MAC_SIGN_ENV[@]+"${MAC_SIGN_ENV[@]}"} npx tauri build --bundles app)
 BUNDLE_DIR="${ROOT}/src-tauri/target/release/bundle"
 MAC_APP="${BUNDLE_DIR}/macos/Marie Lookup.app"
 
